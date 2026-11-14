@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pymobiledevice3.exceptions import ConnectionFailedToUsbmuxdError, MissingValueError, NotPairedError
 
-from desktop_device import Device, DeviceError, _describe_device, list_devices, replay_route, reset_location
-from run import dvt_location
+from iosrealrun.desktop_device import Device, DeviceError, _describe_device, list_devices, replay_route, reset_location
+from iosrealrun.run import dvt_location
 
 
 class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
@@ -15,8 +15,8 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
         for platform, hint in (("linux", "usbmuxd"), ("win32", "Apple Devices"), ("darwin", "系统 USB")):
             with (
                 self.subTest(platform=platform),
-                patch("desktop_device.sys.platform", platform),
-                patch("desktop_device.usbmux.list_devices", AsyncMock(side_effect=ConnectionFailedToUsbmuxdError)),
+                patch("iosrealrun.desktop_device.sys.platform", platform),
+                patch("iosrealrun.desktop_device.usbmux.list_devices", AsyncMock(side_effect=ConnectionFailedToUsbmuxdError)),
             ):
                 with self.assertRaisesRegex(DeviceError, hint):
                     await list_devices()
@@ -30,8 +30,8 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
         ]
         ready = Device("first", "iPad", "26.4", True)
         with (
-            patch("desktop_device.usbmux.list_devices", AsyncMock(return_value=attached)),
-            patch("desktop_device._read_device", AsyncMock(side_effect=[ready, TimeoutError()])),
+            patch("iosrealrun.desktop_device.usbmux.list_devices", AsyncMock(return_value=attached)),
+            patch("iosrealrun.desktop_device._read_device", AsyncMock(side_effect=[ready, TimeoutError()])),
         ):
             first, second = await list_devices()
         self.assertEqual(first, ready)
@@ -43,8 +43,8 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
 
         unpaired = MagicMock(all_values={"DeviceName": "iPad", "ProductVersion": "27.0"}, paired=False)
         with (
-            patch("desktop_device.usbmux.list_devices", AsyncMock(return_value=attached)),
-            patch("desktop_device.create_using_usbmux", AsyncMock(side_effect=[unpaired, NotPairedError()])),
+            patch("iosrealrun.desktop_device.usbmux.list_devices", AsyncMock(return_value=attached)),
+            patch("iosrealrun.desktop_device.create_using_usbmux", AsyncMock(side_effect=[unpaired, NotPairedError()])),
         ):
             first, second = await list_devices()
         self.assertEqual(first.version, "27.0")
@@ -111,8 +111,8 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
                 self.fail("Cancellation must not open a location channel")
 
         with (
-            patch("run.DvtProvider", return_value=SimpleNamespace(connect=connect, close=close)),
-            patch("run.LocationSimulation") as location,
+            patch("iosrealrun.run.DvtProvider", return_value=SimpleNamespace(connect=connect, close=close)),
+            patch("iosrealrun.run.LocationSimulation") as location,
         ):
             worker = asyncio.create_task(use_location())
             await connecting.wait()
@@ -166,7 +166,7 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 cancelled.set()
 
-        with patch("desktop_device._open_location_service", open_service):
+        with patch("iosrealrun.desktop_device._open_location_service", open_service):
             restored = await asyncio.wait_for(replay_route(
                 "device", self._points, speed=100, laps=1, interval=1,
                 coordinate_system="wgs84", stop_requested=stopped.is_set, pause_requested=lambda: False,
@@ -219,7 +219,7 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reset_failure_is_reported(self):
         location = SimpleNamespace(clear=AsyncMock(side_effect=ConnectionResetError()))
-        with patch("desktop_device._location_service", self._service(location)):
+        with patch("iosrealrun.desktop_device._location_service", self._service(location)):
             with self.assertRaisesRegex(DeviceError, "未能恢复设备定位"):
                 await reset_location("device")
 
@@ -244,5 +244,5 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
             "on_progress": on_progress,
         }
         options.update(overrides)
-        with patch("desktop_device._location_service", self._service(location)):
+        with patch("iosrealrun.desktop_device._location_service", self._service(location)):
             return await replay_route("device", self._points, **options)

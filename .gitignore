@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 /.venv-build/
 /dist/
+/config.yaml
 /config.local.yaml
 *.pyc
 *.log

@@ -3,7 +3,7 @@ import ctypes
 import os
 import logging
 
-from driver import connect
+from iosrealrun.driver import connect
 
 logger = logging.getLogger(__name__)
 

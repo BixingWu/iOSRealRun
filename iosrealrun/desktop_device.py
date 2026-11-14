@@ -30,8 +30,8 @@ from pymobiledevice3.exceptions import (
 from pymobiledevice3.lockdown import create_using_usbmux
 from pymobiledevice3.services.amfi import AmfiService
 
-from driver.connect import device_version
-from run import dvt_location, geodistance, to_wgs84
+from iosrealrun.driver.connect import device_version
+from iosrealrun.run import dvt_location, geodistance, to_wgs84
 
 
 DEVELOPER_MODE_HELP = "在设备的「设置 → 隐私与安全性 → 开发者模式」中开启，并按提示重启和确认。"

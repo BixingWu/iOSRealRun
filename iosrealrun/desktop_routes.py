@@ -115,7 +115,7 @@ def load_route(path: str | Path, *, preserve_endpoint=False) -> tuple[list[dict[
 
 
 def route_length(points: list[dict[str, float]], *, closed: bool = True) -> float:
-    from run import geodistance
+    from iosrealrun.run import geodistance
 
     if len(points) < 2:
         return 0

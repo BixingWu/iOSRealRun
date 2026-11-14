@@ -12,7 +12,8 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
-PROJECT = Path(__file__).resolve().parent
+SCRIPTS = Path(__file__).resolve().parent
+PROJECT = SCRIPTS.parent
 APP_NAME = "iOSRealRun"
 TARGETS = {
     ("win32", "win-amd64"): ("windows-x64", "Windows-x64.zip"),
@@ -38,7 +39,7 @@ def build_environment():
 
 
 def include_documentation(directory):
-    for name in ("LICENSE", "README.md", "CONTRIBUTING.md", "THIRD_PARTY_NOTICES.md"):
+    for name in ("LICENSE", "README.md", "CONTRIBUTING.md", "config.example.yaml"):
         shutil.copy2(PROJECT / name, directory)
     shutil.copytree(PROJECT / "LICENSES", directory / "LICENSES")
     shutil.copytree(PROJECT / "docs", directory / "docs")
@@ -77,7 +78,7 @@ def main():
     dist.mkdir(exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix=f"{directory_name}-", dir=dist))
     run([sys.executable, "-I", "-m", "PyInstaller", "--noconfirm",
-         "--distpath", str(directory), "--workpath", str(directory / "work"), str(PROJECT / "iosrealrun.spec")],
+         "--distpath", str(directory), "--workpath", str(directory / "work"), str(SCRIPTS / "iosrealrun.spec")],
         env=build_environment())
 
     archive = directory / f"{APP_NAME}-{filename}"

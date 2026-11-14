@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectDir = $PSScriptRoot
+$ProjectDir = Split-Path -Parent $PSScriptRoot
 $VenvDir = Join-Path $ProjectDir ".pvenv"
 $PythonExe = Join-Path $VenvDir "Scripts\python.exe"
 $Requirements = Join-Path $ProjectDir "requirements.txt"
@@ -172,7 +172,7 @@ try {
     if ($SetupOnly) {
         Write-Host "Setup complete. Double-click Start-iOSRealRun.bat to launch."
     } elseif ($DesktopMode) {
-        & $PythonExe .\desktop.py
+        & $PythonExe -m iosrealrun
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0 -and $PauseOnError) {
             Read-Host "Press Enter to close" | Out-Null
@@ -187,7 +187,7 @@ try {
         $exitCode = $child.ExitCode
     } else {
         Write-Host "Starting iOSRealRun. Use Ctrl+C in this window to stop."
-        $appArguments = @(".\main.py")
+        $appArguments = @("-m", "iosrealrun.main")
         if ($SkipMount) { $appArguments += "--skip-mount" }
         & $PythonExe @appArguments
         $exitCode = $LASTEXITCODE

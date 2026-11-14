@@ -8,7 +8,7 @@ from threading import Condition
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from map_picker import (
+from iosrealrun.map_picker import (
     TILE_SIZE,
     USER_AGENT,
     WEEK,
@@ -109,7 +109,7 @@ class MapCacheTests(unittest.TestCase):
         key = (3, 1, 2)
         self.cache.execute("INSERT INTO tile VALUES (?, ?, ?, ?, 0, 'test-etag', NULL)", (*key, TILE))
         error = HTTPError("https://tile.openstreetmap.org/3/1/2.png", 304, "Not Modified", headers, BytesIO())
-        with patch("map_picker.urlopen", side_effect=error) as fetch:
+        with patch("iosrealrun.map_picker.urlopen", side_effect=error) as fetch:
             self.assertEqual(self.loader._fetch(self.cache, key), TILE)
             request = fetch.call_args.args[0]
             self.assertEqual(request.get_header("User-agent"), USER_AGENT)
@@ -125,7 +125,7 @@ class MapCacheTests(unittest.TestCase):
             with self.subTest(tile_length=len(bad_tile)):
                 self.cache.execute("INSERT OR REPLACE INTO tile VALUES (?, ?, ?, ?, 9999999999, 'old-etag', NULL)",
                                    (*key, bad_tile))
-                with patch("map_picker.urlopen", return_value=_Response(TILE)) as fetch:
+                with patch("iosrealrun.map_picker.urlopen", return_value=_Response(TILE)) as fetch:
                     self.assertEqual(self.loader._fetch(self.cache, key), TILE)
                     self.assertIsNone(fetch.call_args.args[0].get_header("If-none-match"))
                 self.assertEqual(self.cache.execute("SELECT data FROM tile").fetchone()[0], TILE)
@@ -144,7 +144,7 @@ class MapCacheTests(unittest.TestCase):
         self.assertFalse(_valid_tile(_png_tile(PIXELS[:-1])))
 
     def test_invalid_tile_response_is_not_cached(self):
-        with patch("map_picker.urlopen", return_value=_Response(_png_tile(PIXELS[:-1]))):
+        with patch("iosrealrun.map_picker.urlopen", return_value=_Response(_png_tile(PIXELS[:-1]))):
             self.assertIsNone(self.loader._fetch(self.cache, (3, 1, 2)))
         self.assertIsNone(self.cache.execute("SELECT data FROM tile").fetchone())
 
@@ -153,7 +153,7 @@ class MapCacheTests(unittest.TestCase):
         headers["Retry-After"] = "75"
         self.cache.execute("INSERT INTO tile VALUES (3, 1, 2, ?, 9999999999, NULL, NULL)", (TILE,))
         error = HTTPError("https://tile.openstreetmap.org/3/1/3.png", 429, "Busy", headers, BytesIO())
-        with patch("map_picker.urlopen", side_effect=error) as fetch:
+        with patch("iosrealrun.map_picker.urlopen", side_effect=error) as fetch:
             self.assertIsNone(self.loader._fetch(self.cache, (3, 1, 3)))
             self.assertGreater(self.loader.retry_delay, 70)
             self.assertIsNone(self.loader._fetch(self.cache, (3, 2, 2)))
@@ -162,13 +162,13 @@ class MapCacheTests(unittest.TestCase):
 
     def test_cache_prunes_rows_to_payload_budget(self):
         self.cache.execute("INSERT INTO tile VALUES (3, 1, 2, ?, 1, NULL, NULL)", (TILE,))
-        with patch("map_picker.CACHE_BYTES", len(TILE)), patch("map_picker.urlopen", return_value=_Response(TILE)):
+        with patch("iosrealrun.map_picker.CACHE_BYTES", len(TILE)), patch("iosrealrun.map_picker.urlopen", return_value=_Response(TILE)):
             self.assertEqual(self.loader._fetch(self.cache, (3, 2, 2)), TILE)
         self.assertEqual(self.cache.execute("SELECT x FROM tile").fetchall(), [(2,)])
 
     def test_closing_skips_network_for_unstarted_requests(self):
         self.loader._closed = True
-        with patch("map_picker.urlopen") as fetch:
+        with patch("iosrealrun.map_picker.urlopen") as fetch:
             self.assertIsNone(self.loader._fetch(self.cache, (3, 2, 2)))
             fetch.assert_not_called()
 

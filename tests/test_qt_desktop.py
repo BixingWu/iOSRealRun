@@ -12,9 +12,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QPlainTextEdit, QPushButton
 
-from app_version import VERSION
-from desktop_device import Device
-from qt_desktop import ROOT, Desktop, main, read_settings
+from iosrealrun.app_version import VERSION
+from iosrealrun.desktop_device import Device
+from iosrealrun.config import read_settings
+from iosrealrun.paths import RESOURCE_ROOT
+from iosrealrun.qt_desktop import Desktop, main
 
 
 class DesktopUITests(unittest.TestCase):
@@ -25,7 +27,7 @@ class DesktopUITests(unittest.TestCase):
         cls.application.setQuitOnLastWindowClosed(False)
 
     def make_window(self):
-        with patch("qt_desktop.read_settings", return_value=({}, ROOT, "")):
+        with patch("iosrealrun.qt_desktop.read_settings", return_value=({}, RESOURCE_ROOT, "")):
             window = Desktop(discover=False)
         window.show()
         self.application.processEvents()
@@ -56,10 +58,10 @@ class DesktopUITests(unittest.TestCase):
             contents = Path(directory).resolve() / "iOSRealRun.app" / "Contents"
             framework_root = contents / "Frameworks"
             resource_root = contents / "Resources"
-            framework_root.mkdir(parents=True)
-            resource_root.mkdir()
-            preset = framework_root / "ZJGEast.txt"
-            target = resource_root / preset.name
+            (framework_root / "routes").mkdir(parents=True)
+            (resource_root / "routes").mkdir(parents=True)
+            preset = framework_root / "routes" / "ZJGEast.txt"
+            target = resource_root / "routes" / preset.name
             route = '[{"lat": 30.1, "lng": 120.1}, {"lat": 30.101, "lng": 120.101}]'
             preset.write_text(route, encoding="utf-8")
             target.write_text(route, encoding="utf-8")
@@ -72,7 +74,7 @@ class DesktopUITests(unittest.TestCase):
 
             # Emulate the file symlink on Windows runners without symlink privileges.
             with (
-                patch("qt_desktop.ROOT", framework_root),
+                patch("iosrealrun.paths.RESOURCE_ROOT", framework_root),
                 patch.object(type(preset), "resolve", resolve_bundle_path),
             ):
                 self.assertTrue(window.open_route(preset, remember=False))
@@ -86,7 +88,7 @@ class DesktopUITests(unittest.TestCase):
 
     def test_version_command_does_not_create_a_window(self):
         output = io.StringIO()
-        with patch("sys.argv", ["desktop.py", "--version"]), redirect_stdout(output):
+        with patch("sys.argv", ["iosrealrun", "--version"]), redirect_stdout(output):
             with self.assertRaises(SystemExit) as exit_status:
                 main()
         self.assertEqual(exit_status.exception.code, 0)
@@ -103,6 +105,7 @@ class DesktopUITests(unittest.TestCase):
                 patch("sys.frozen", True, create=True),
                 patch("sys.executable", str(home / "iOSRealRun.app" / "Contents" / "MacOS" / "iOSRealRun")),
                 patch.object(Path, "home", return_value=home),
+                patch("iosrealrun.paths.RESOURCE_ROOT", home / "iOSRealRun.app" / "Contents" / "Frameworks"),
             ):
                 settings, config_dir, warning = read_settings()
         self.assertEqual(config_dir, user_config)
@@ -146,7 +149,7 @@ class DesktopUITests(unittest.TestCase):
             window.route_store = Path(folder) / "last-route.json"
             points = [{"lat": 30.1, "lng": 120.1}, {"lat": 30.101, "lng": 120.101}]
             window.set_route(points, "地图路线", "wgs84", False)
-            with patch("qt_desktop.read_settings", return_value=({}, ROOT, "")):
+            with patch("iosrealrun.qt_desktop.read_settings", return_value=({}, RESOURCE_ROOT, "")):
                 window.load_settings()
             self.assertEqual(window.points, points)
             self.assertEqual(window.route_box.currentText(), "地图路线")
@@ -186,7 +189,7 @@ class DesktopUITests(unittest.TestCase):
             cleaned.set()
             return True
 
-        with patch("qt_desktop.replay_route", replay):
+        with patch("iosrealrun.qt_desktop.replay_route", replay):
             window.start_or_stop()
             self.wait_for(lambda: started.is_set() and window.pause_button.isVisible())
             window.toggle_pause()
