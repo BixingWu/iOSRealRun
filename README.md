@@ -12,15 +12,15 @@
 
 ### 1. 下载并打开
 
-**[下载桌面版 v0.2.0-beta.2](https://github.com/BixingWu/iOSRealRun-26/releases/tag/v0.2.0-beta.2)** · [更新说明](docs/releases/v0.2.0-beta.2.md)
+**[下载桌面版 v0.2.0-beta.2](https://github.com/BixingWu/iOSRealRun/releases/tag/v0.2.0-beta.2)** · [更新说明](docs/releases/v0.2.0-beta.2.md)
 
 这是首个桌面预发布版本。安装包自带 Python、Qt 和六条示例路线，下载后无需另装 Python。
 
 | 平台 | 下载文件 | 打开方式 |
 | --- | --- | --- |
-| Windows x64 | [iOSRealRun-Windows-x64.zip](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.2/iOSRealRun-Windows-x64.zip) | 完整解压，进入 `iOSRealRun` 文件夹，双击 `iOSRealRun.exe`。保留 `_internal` 文件夹。 |
-| macOS 15+ · Apple Silicon | [iOSRealRun-macOS-arm64.zip](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.2/iOSRealRun-macOS-arm64.zip) | 实验版。解压得到 `iOSRealRun.app`，可拖入「应用程序」。 |
-| Ubuntu 22.04 / 24.04 · x64 | [iOSRealRun-Linux-x64.tar.gz](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.2/iOSRealRun-Linux-x64.tar.gz) | 实验版。解压后运行 `iOSRealRun/iOSRealRun`，需要桌面环境和下方系统依赖。 |
+| Windows x64 | [iOSRealRun-Windows-x64.zip](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.2/iOSRealRun-Windows-x64.zip) | 完整解压，进入 `iOSRealRun` 文件夹，双击 `iOSRealRun.exe`。保留 `_internal` 文件夹。 |
+| macOS 15+ · Apple Silicon | [iOSRealRun-macOS-arm64.zip](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.2/iOSRealRun-macOS-arm64.zip) | 实验版。解压得到 `iOSRealRun.app`，可拖入「应用程序」。 |
+| Ubuntu 22.04 / 24.04 · x64 | [iOSRealRun-Linux-x64.tar.gz](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.2/iOSRealRun-Linux-x64.tar.gz) | 实验版。解压后运行 `iOSRealRun/iOSRealRun`，需要桌面环境和下方系统依赖。 |
 
 macOS 构建暂未提供 Developer ID 签名和公证，可能受到系统拦截。请按 [Apple 的应用打开说明](https://support.apple.com/guide/mac-help/mh40616/mac)处理，或使用源码版。当前没有 Intel Mac 安装包。
 
@@ -37,7 +37,7 @@ Linux 通过 `usbmuxd` 与 USB 设备通信，服务必须可用。macOS 使用�
 
 Release 同时提供 `SHA256SUMS.txt`，便于检查文件是否下载完整。Windows 可用 `Get-FileHash 文件名 -Algorithm SHA256`，macOS 用 `shasum -a 256 文件名`，Linux 用 `sha256sum 文件名`，将结果与清单对照。
 
-[Actions](https://github.com/BixingWu/iOSRealRun-26/actions/workflows/windows-build.yml) 保留开发构建；其中的 Artifacts 下载需要登录 GitHub。**Code → Download ZIP** 下载的是源码，需按下方[源码启动](#从源码启动)步骤使用。
+[Actions](https://github.com/BixingWu/iOSRealRun/actions/workflows/windows-build.yml) 保留开发构建；其中的 Artifacts 下载需要登录 GitHub。**Code → Download ZIP** 下载的是源码，需按下方[源码启动](#从源码启动)步骤使用。
 
 ### 2. 连接设备
 
@@ -89,12 +89,12 @@ Release 同时提供 `SHA256SUMS.txt`，便于检查文件是否下载完整。W
 
 | 界面名称 | 文件 | 坐标系 |
 | --- | --- | --- |
-| 紫金港东操场 | [ZJGEast.txt](https://github.com/BixingWu/iOSRealRun-26/blob/main/ZJGEast.txt) | BD-09 |
-| 紫金港西操场 | [ZJGWest.txt](https://github.com/BixingWu/iOSRealRun-26/blob/main/ZJGWest.txt) | BD-09 |
-| 玉泉操场 | [YuQuan.txt](https://github.com/BixingWu/iOSRealRun-26/blob/main/YuQuan.txt) | BD-09 |
-| 玉泉操场 · YQ | [YQ.txt](https://github.com/BixingWu/iOSRealRun-26/blob/main/YQ.txt) | BD-09 |
-| 西溪操场 | [XiXi.txt](https://github.com/BixingWu/iOSRealRun-26/blob/main/XiXi.txt) | BD-09 |
-| 海宁操场 | [HaiNing.txt](https://github.com/BixingWu/iOSRealRun-26/blob/main/HaiNing.txt) | BD-09 |
+| 紫金港东操场 | [ZJGEast.txt](https://github.com/BixingWu/iOSRealRun/blob/main/ZJGEast.txt) | BD-09 |
+| 紫金港西操场 | [ZJGWest.txt](https://github.com/BixingWu/iOSRealRun/blob/main/ZJGWest.txt) | BD-09 |
+| 玉泉操场 | [YuQuan.txt](https://github.com/BixingWu/iOSRealRun/blob/main/YuQuan.txt) | BD-09 |
+| 玉泉操场 · YQ | [YQ.txt](https://github.com/BixingWu/iOSRealRun/blob/main/YQ.txt) | BD-09 |
+| 西溪操场 | [XiXi.txt](https://github.com/BixingWu/iOSRealRun/blob/main/XiXi.txt) | BD-09 |
+| 海宁操场 | [HaiNing.txt](https://github.com/BixingWu/iOSRealRun/blob/main/HaiNing.txt) | BD-09 |
 
 这些是选取的示例路线，不是测绘数据。使用前请检查预览、坐标系和起终点。
 
@@ -174,7 +174,7 @@ python3.12 -m venv .venv
 
 ### 默认配置与命令行
 
-公开默认值在 [config.yaml](https://github.com/BixingWu/iOSRealRun-26/blob/main/config.yaml)。自己的设置可写到同目录的 `config.local.yaml`，覆盖对应项；这个文件不会提交到 Git。路线已在本机保存时，桌面版优先恢复最近使用的路线。
+公开默认值在 [config.yaml](https://github.com/BixingWu/iOSRealRun/blob/main/config.yaml)。自己的设置可写到同目录的 `config.local.yaml`，覆盖对应项；这个文件不会提交到 Git。路线已在本机保存时，桌面版优先恢复最近使用的路线。
 
 ```yaml
 v: 4.4
@@ -230,7 +230,7 @@ python3.12 -m venv .venv-build
 
 开发约定、测试和真机验证记录见 [参与开发](CONTRIBUTING.md)。
 
-发现问题可以[提交 Issue](https://github.com/BixingWu/iOSRealRun-26/issues)，请说明电脑系统、设备型号、系统完整版本、便携版或源码版、复现步骤和错误提示。截图时请遮住设备标识和不希望公开的路线。提交修复时附上相关测试；涉及设备连接的改动，请注明是否做过真机验证。
+发现问题可以[提交 Issue](https://github.com/BixingWu/iOSRealRun/issues)，请说明电脑系统、设备型号、系统完整版本、便携版或源码版、复现步骤和错误提示。截图时请遮住设备标识和不希望公开的路线。提交修复时附上相关测试；涉及设备连接的改动，请注明是否做过真机验证。
 
 ## 来源与许可
 

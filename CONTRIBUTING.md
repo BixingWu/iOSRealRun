@@ -1,6 +1,8 @@
 # 参与 iOSRealRun 开发
 
-遇到问题先看 [README 的使用方法](README.md#使用方法)和[常见问题](README.md#常见问题)。如果仍能复现，请[提交问题报告](https://github.com/BixingWu/iOSRealRun-26/issues/new?template=bug_report.yml)，注明它发生在启动、设备连接、路线导入、回放还是恢复定位时。
+遇到问题先看 [README 的使用方法](README.md#使用方法)和[常见问题](README.md#常见问题)。如果仍能复现，请[提交问题报告](https://github.com/BixingWu/iOSRealRun/issues/new?template=bug_report.yml)，注明它发生在启动、设备连接、路线导入、回放还是恢复定位时。
+
+日常修改请新建分支，再提交 Pull Request 到 `main`。合并前需通过 `Windows checks / test`，并与主分支保持同步。
 
 ## 本地开发
 

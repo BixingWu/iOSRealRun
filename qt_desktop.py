@@ -655,7 +655,7 @@ class Desktop(QMainWindow):
         set_property(self.status_label, "error", error)
 
     def open_help(self):
-        QDesktopServices.openUrl(QUrl("https://github.com/BixingWu/iOSRealRun-26#使用方法"))
+        QDesktopServices.openUrl(QUrl("https://github.com/BixingWu/iOSRealRun#使用方法"))
 
     def open_driver_help(self):
         QDesktopServices.openUrl(QUrl("https://support.apple.com/118290"))
