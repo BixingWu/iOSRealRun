@@ -81,12 +81,9 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           pattern: iOSRealRun-*
-          path: release-assets
-          merge-multiple: true
-      - name: Generate asset checksums
-        working-directory: release-assets
-        shell: bash
-        run: sha256sum iOSRealRun-Windows-x64.zip iOSRealRun-macOS-arm64.zip iOSRealRun-Linux-x64.tar.gz > SHA256SUMS.txt
+          path: incoming-artifacts
+      - name: Stage assets and generate checksums
+        run: python3 .github/ci_check.py python3 .github/prepare_release.py incoming-artifacts release-assets
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,18 +91,18 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
         shell: bash
         run: |
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo '::error::Expected a version tag such as v1.2.3 or v1.2.3-beta.1.'; exit 1; }
           expected_tag="v$(python3 -c 'from app_version import VERSION; print(VERSION)')"
-          [[ "$RELEASE_TAG" == "$expected_tag" ]]
+          [[ "$RELEASE_TAG" == "$expected_tag" ]] || { echo '::error::The pushed tag does not match app_version.VERSION.'; exit 1; }
           remote_tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
-          [[ "$remote_tag_sha" == "$(git rev-parse "$RELEASE_SHA^{commit}")" ]]
+          [[ "$remote_tag_sha" == "$(git rev-parse "$RELEASE_SHA^{commit}")" ]] || { echo '::error::The remote tag does not match the commit used to build the assets.'; exit 1; }
           notes="docs/releases/$RELEASE_TAG.md"
-          test -s "$notes"
+          test -s "$notes" || { echo '::error::The version is missing its release notes under docs/releases/.'; exit 1; }
           prerelease=()
           if [[ "$RELEASE_TAG" == *-* ]]; then
             prerelease+=(--prerelease)
           fi
-          gh release create --repo "$GITHUB_REPOSITORY" --verify-tag --target "$remote_tag_sha" \
+          python3 .github/ci_check.py gh release create --repo "$GITHUB_REPOSITORY" --verify-tag --target "$remote_tag_sha" \
             --title "iOSRealRun $RELEASE_TAG" --notes-file "$notes" "${prerelease[@]}" -- "$RELEASE_TAG" \
             release-assets/iOSRealRun-Windows-x64.zip release-assets/iOSRealRun-macOS-arm64.zip \
             release-assets/iOSRealRun-Linux-x64.tar.gz release-assets/SHA256SUMS.txt

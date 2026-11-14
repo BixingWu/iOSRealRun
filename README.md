@@ -12,15 +12,15 @@
 
 ### 1. 下载并打开
 
-**[下载桌面版 v0.2.0-beta.1](https://github.com/BixingWu/iOSRealRun-26/releases/tag/v0.2.0-beta.1)** · [更新说明](docs/releases/v0.2.0-beta.1.md)
+**[下载桌面版 v0.2.0-beta.2](https://github.com/BixingWu/iOSRealRun-26/releases/tag/v0.2.0-beta.2)** · [更新说明](docs/releases/v0.2.0-beta.2.md)
 
 这是首个桌面预发布版本。安装包自带 Python、Qt 和六条示例路线，下载后无需另装 Python。
 
 | 平台 | 下载文件 | 打开方式 |
 | --- | --- | --- |
-| Windows x64 | [iOSRealRun-Windows-x64.zip](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.1/iOSRealRun-Windows-x64.zip) | 完整解压，进入 `iOSRealRun` 文件夹，双击 `iOSRealRun.exe`。保留 `_internal` 文件夹。 |
-| macOS 15+ · Apple Silicon | [iOSRealRun-macOS-arm64.zip](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.1/iOSRealRun-macOS-arm64.zip) | 实验版。解压得到 `iOSRealRun.app`，可拖入「应用程序」。 |
-| Ubuntu 22.04 / 24.04 · x64 | [iOSRealRun-Linux-x64.tar.gz](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.1/iOSRealRun-Linux-x64.tar.gz) | 实验版。解压后运行 `iOSRealRun/iOSRealRun`，需要桌面环境和下方系统依赖。 |
+| Windows x64 | [iOSRealRun-Windows-x64.zip](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.2/iOSRealRun-Windows-x64.zip) | 完整解压，进入 `iOSRealRun` 文件夹，双击 `iOSRealRun.exe`。保留 `_internal` 文件夹。 |
+| macOS 15+ · Apple Silicon | [iOSRealRun-macOS-arm64.zip](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.2/iOSRealRun-macOS-arm64.zip) | 实验版。解压得到 `iOSRealRun.app`，可拖入「应用程序」。 |
+| Ubuntu 22.04 / 24.04 · x64 | [iOSRealRun-Linux-x64.tar.gz](https://github.com/BixingWu/iOSRealRun-26/releases/download/v0.2.0-beta.2/iOSRealRun-Linux-x64.tar.gz) | 实验版。解压后运行 `iOSRealRun/iOSRealRun`，需要桌面环境和下方系统依赖。 |
 
 macOS 构建暂未提供 Developer ID 签名和公证，可能受到系统拦截。请按 [Apple 的应用打开说明](https://support.apple.com/guide/mac-help/mh40616/mac)处理，或使用源码版。当前没有 Intel Mac 安装包。
 
