@@ -1,0 +1,17 @@
+name: 功能建议
+description: 建议改进桌面界面、路线、连接或安装流程
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 遇到的场景
+      description: 说说你在什么系统、用什么流程时遇到了不便。
+    validations:
+      required: true
+  - type: textarea
+    id: desired-change
+    attributes:
+      label: 希望怎样改进
+      description: 描述你希望完成的操作。如果已有可参考的例子，可以附上链接。
+    validations:
+      required: true

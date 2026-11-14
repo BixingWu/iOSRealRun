@@ -1,11 +1,17 @@
 param(
-    [switch]$SkipMount
+    [switch]$SkipMount,
+    [switch]$SetupOnly,
+    [switch]$Console,
+    [string]$Python,
+    [switch]$PauseOnError
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectDir = $PSScriptRoot
 $VenvDir = Join-Path $ProjectDir ".pvenv"
 $PythonExe = Join-Path $VenvDir "Scripts\python.exe"
+$Requirements = Join-Path $ProjectDir "requirements.txt"
+$DesktopMode = -not ($Console -or $SkipMount)
 
 function Test-IsAdmin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -13,96 +19,188 @@ function Test-IsAdmin {
     return $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
 }
 
-if (-not (Test-IsAdmin)) {
-    $arguments = @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-NoExit",
-        "-File", "`"$PSCommandPath`""
-    )
-    if ($SkipMount) {
-        $arguments += "-SkipMount"
-    }
+function Invoke-PythonProbe {
+    param([string]$Executable, [string[]]$Arguments)
 
-    Start-Process `
-        -FilePath "powershell.exe" `
-        -ArgumentList $arguments `
-        -WorkingDirectory $ProjectDir `
-        -Verb RunAs
-    exit
+    if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+        return
+    }
+    # Windows PowerShell can turn stderr from a broken launcher into an error record.
+    $ErrorActionPreference = "Continue"
+    $output = & $Executable @Arguments 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $output
+    }
 }
 
-Set-Location $ProjectDir
-$env:PYTHONUTF8 = "1"
+function Find-BasePython {
+    # Keep the interpreter path intact across PowerShell 5.1 and Python code pages.
+    $probe = "import base64, sys, sysconfig, venv, ensurepip; assert (3, 10) <= sys.version_info[:2] < (3, 15) and sysconfig.get_platform() in ('win-amd64', 'win-arm64'); print(base64.b64encode(sys._base_executable.encode('utf-8')).decode('ascii'))"
+    $pythonDescription = "64-bit Python 3.10 to 3.14"
+    $arguments = @("-I", "-c", $probe)
 
-Write-Host "iOSRealRun launcher"
-Write-Host "Project: $ProjectDir"
-Write-Host ""
-
-if (-not (Test-Path $PythonExe)) {
-    Write-Host "Local virtual environment not found. Creating .pvenv..."
-    $PythonLauncher = Get-Command py -ErrorAction SilentlyContinue
-    if ($PythonLauncher) {
-        & py -3 -m venv $VenvDir
-    } else {
-        $SystemPython = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $SystemPython) {
-            Write-Host "Python was not found. Please install Python 3.10+ and try again." -ForegroundColor Red
-            Read-Host "Press Enter to close"
-            exit 1
+    if ($Python) {
+        $executable = Invoke-PythonProbe $Python $arguments
+        if (-not $executable) {
+            throw "Cannot use '$Python'. Specify the path to a working $pythonDescription."
         }
-        & python -m venv $VenvDir
+    } else {
+        $launcher = Get-Command py.exe -CommandType Application -ErrorAction SilentlyContinue
+        if ($launcher) {
+            foreach ($version in @("-3.12", "-3.11", "-3.13", "-3.10", "-3.14", "-3")) {
+                $executable = Invoke-PythonProbe $launcher.Source (@($version) + $arguments)
+                if ($executable) { break }
+            }
+        }
+
+        if (-not $executable) {
+            $systemPython = Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue
+            if ($systemPython -and $systemPython.Source -notlike "*\Microsoft\WindowsApps\python.exe") {
+                $executable = Invoke-PythonProbe $systemPython.Source $arguments
+            }
+        }
     }
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $PythonExe)) {
-        Write-Host "Failed to create .pvenv." -ForegroundColor Red
-        Read-Host "Press Enter to close"
-        exit 1
+
+    if (-not $executable) {
+        throw "No usable Python found. Install $pythonDescription from https://www.python.org/downloads/ or rerun with -Python and the full path to python.exe."
+    }
+    return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($executable))
+}
+
+function Initialize-Environment {
+    $lockPath = Join-Path $ProjectDir ".pvenv.lock"
+    try {
+        $setupLock = [System.IO.File]::Open($lockPath, "OpenOrCreate", "Write", "None")
+    } catch [System.IO.IOException] {
+        throw "Could not lock the project for setup. Close other setup windows and try again. $($_.Exception.Message)"
+    }
+
+    try {
+        $oldEnvironment = Get-Item -LiteralPath $VenvDir -Force -ErrorAction SilentlyContinue
+        if ($oldEnvironment -and (-not $oldEnvironment.PSIsContainer -or
+            ($oldEnvironment.Attributes -band [System.IO.FileAttributes]::ReparsePoint))) {
+            throw "Expected a regular virtual environment directory at '$VenvDir'."
+        }
+
+        $venvProbe = "import sys, sysconfig; assert sys.prefix != sys.base_prefix and (3, 10) <= sys.version_info[:2] < (3, 15) and sysconfig.get_platform() in ('win-amd64', 'win-arm64'); print(sys.version.split()[0])"
+        $pythonVersion = Invoke-PythonProbe $PythonExe @("-I", "-c", $venvProbe)
+        if (-not $pythonVersion) {
+            $basePython = Find-BasePython
+            if ($oldEnvironment) {
+                $backupName = ".pvenv.broken-$([guid]::NewGuid().ToString('N'))"
+                Rename-Item -LiteralPath $oldEnvironment.FullName -NewName $backupName
+                Write-Host "Saved the old virtual environment as $backupName"
+            }
+
+            Write-Host "Creating .pvenv with $basePython"
+            & $basePython -I -m venv $VenvDir
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not create .pvenv. Check the Python error above and retry."
+            }
+            $pythonVersion = Invoke-PythonProbe $PythonExe @("-I", "-c", $venvProbe)
+            if (-not $pythonVersion) {
+                throw "The new virtual environment's Python could not start."
+            }
+        }
+        Write-Host "Python $pythonVersion ($PythonExe)"
+
+        $stamp = Join-Path $VenvDir "requirements.sha256"
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $requirementsHash = [Convert]::ToBase64String($sha256.ComputeHash([System.IO.File]::ReadAllBytes($Requirements)))
+        } finally {
+            $sha256.Dispose()
+        }
+        $installedHash = Get-Content -LiteralPath $stamp -ErrorAction SilentlyContinue
+        $dependencyProbe = @'
+import coloredlogs
+import geopy.distance
+import yaml
+from importlib.metadata import version
+from PySide6.QtWidgets import QApplication
+from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
+from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
+from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
+from pymobiledevice3.services.simulate_location import DtSimulateLocation
+
+print(version('pymobiledevice3'))
+'@
+        $deviceLibraryVersion = Invoke-PythonProbe $PythonExe @("-I", "-c", $dependencyProbe)
+
+        if ($installedHash -ne $requirementsHash -or -not $deviceLibraryVersion) {
+            if (-not (Invoke-PythonProbe $PythonExe @("-I", "-m", "pip", "--version"))) {
+                & $PythonExe -I -m ensurepip --upgrade
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Could not install pip in .pvenv."
+                }
+            }
+            Write-Host "Installing project dependencies..."
+            & $PythonExe -I -m pip --disable-pip-version-check install -r $Requirements
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not install project dependencies. Check the pip error above and rerun with -SetupOnly."
+            }
+            & $PythonExe -I -m pip check
+            if ($LASTEXITCODE -ne 0) {
+                throw "The installed dependencies have conflicts. See the pip output above."
+            }
+            $deviceLibraryVersion = & $PythonExe -I -c $dependencyProbe
+            if ($LASTEXITCODE -ne 0) {
+                throw "Installed dependencies failed to load. Check the Python error above."
+            }
+            Set-Content -LiteralPath $stamp -Value $requirementsHash -Encoding Ascii
+        } elseif ($SetupOnly) {
+            & $PythonExe -I -m pip check
+            if ($LASTEXITCODE -ne 0) {
+                throw "The installed dependencies have conflicts. See the pip output above."
+            }
+        }
+
+        Write-Host "pymobiledevice3 $deviceLibraryVersion"
+    } finally {
+        $setupLock.Dispose()
     }
 }
 
-Write-Host "Python : $PythonExe"
-Write-Host ""
+$exitCode = 0
+Push-Location -LiteralPath $ProjectDir
+try {
+    $env:PYTHONUTF8 = "1"
+    Write-Host "iOSRealRun launcher"
+    Write-Host "Project: $ProjectDir"
+    Initialize-Environment
 
-& $PythonExe -c "import importlib.metadata as m; raise SystemExit(0 if tuple(map(int, m.version('pymobiledevice3').split('.')[:2])) >= (9, 12) else 1)"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installing dependencies..."
-    & $PythonExe -m pip install -U pip
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to upgrade pip." -ForegroundColor Red
-        Read-Host "Press Enter to close"
-        exit $LASTEXITCODE
+    if ($SetupOnly) {
+        Write-Host "Setup complete. Double-click Start-iOSRealRun.bat to launch."
+    } elseif ($DesktopMode) {
+        & $PythonExe .\desktop.py
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0 -and $PauseOnError) {
+            Read-Host "Press Enter to close" | Out-Null
+        }
+    } elseif (-not (Test-IsAdmin)) {
+        Write-Host "Requesting administrator access for the device tunnel..."
+        $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"{0}"' -f $PSCommandPath), "-Console")
+        if ($SkipMount) { $arguments += "-SkipMount" }
+        if ($PauseOnError) { $arguments += "-PauseOnError" }
+        $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $child = Start-Process -FilePath $windowsPowerShell -ArgumentList $arguments -WorkingDirectory $ProjectDir -Verb RunAs -PassThru -Wait
+        $exitCode = $child.ExitCode
+    } else {
+        Write-Host "Starting iOSRealRun. Use Ctrl+C in this window to stop."
+        $appArguments = @(".\main.py")
+        if ($SkipMount) { $appArguments += "--skip-mount" }
+        & $PythonExe @appArguments
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Host "iOSRealRun exited with code $exitCode." -ForegroundColor Red
+            if ($PauseOnError) { Read-Host "Press Enter to close" | Out-Null }
+        }
     }
-    & $PythonExe -m pip install -r .\requirements.txt
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to install dependencies. You can retry later or install manually with:" -ForegroundColor Red
-        Write-Host "$PythonExe -m pip install -r .\requirements.txt"
-        Read-Host "Press Enter to close"
-        exit $LASTEXITCODE
-    }
+} catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    if ($PauseOnError) { Read-Host "Press Enter to close" | Out-Null }
+    $exitCode = 1
+} finally {
+    Pop-Location
 }
-
-& $PythonExe -c "import importlib.metadata as m; print('pymobiledevice3', m.version('pymobiledevice3'))"
-
-if (-not $SkipMount) {
-    Write-Host ""
-    Write-Host "[1/2] Mounting DeveloperDiskImage if needed..."
-    & $PythonExe -m pymobiledevice3 mounter auto-mount
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ""
-        Write-Host "DeveloperDiskImage mount command failed. Check that the iPad is connected, unlocked, trusted, and Developer Mode is enabled." -ForegroundColor Yellow
-        Read-Host "Press Enter to close"
-        exit $LASTEXITCODE
-    }
-}
-
-Write-Host ""
-Write-Host "[2/2] Starting iOSRealRun. Use Ctrl+C in this window to stop safely."
-Write-Host ""
-
-& $PythonExe .\main.py
-$exitCode = $LASTEXITCODE
-
-Write-Host ""
-Write-Host "iOSRealRun exited with code $exitCode"
-Read-Host "Press Enter to close"
 exit $exitCode

@@ -1,95 +1,107 @@
-import signal
-import logging
-import coloredlogs
-import os
+import argparse
 import asyncio
+import logging
+import math
+import os
+import sys
+from pathlib import Path
 
+import coloredlogs
+from yaml import YAMLError
+from pymobiledevice3.dtx.exceptions import DTXNsError, DTXProtocolError
+from pymobiledevice3.exceptions import PyMobileDevice3Exception
 
-from init import init
-from init import tunnel
-from init import route
-
-import run
 import config
+import run
+from desktop_routes import load_route, route_length
+from driver.connect import device_version
+from init import init, tunnel
 
 
-debug = os.environ.get("DEBUG", False)
-
-coloredlogs.install(level=logging.INFO)
-logging.getLogger('wintun').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('quic').setLevel(logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('asyncio').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('zeroconf').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('parso.cache').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('parso.cache.pickle').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('parso.python.diff').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('humanfriendly.prompts').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('blib2to3.pgen2.driver').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
-logging.getLogger('urllib3.connectionpool').setLevel(
-    logging.DEBUG if debug else logging.WARNING)
+logger = logging.getLogger(__name__)
 
 
-async def main():
-    logger = logging.getLogger(__name__)
-    coloredlogs.install(level=logging.INFO)
-    logger.setLevel(logging.INFO)
-    if debug:
-        logger.setLevel(logging.DEBUG)
-        coloredlogs.install(level=logging.DEBUG)
+def configure_logging():
+    level = logging.DEBUG if os.environ.get("DEBUG") else logging.INFO
+    coloredlogs.install(level=level)
+    for name in ("wintun", "quic", "asyncio", "zeroconf", "parso", "humanfriendly", "blib2to3", "urllib3"):
+        logging.getLogger(name).setLevel(logging.DEBUG if level == logging.DEBUG else logging.WARNING)
 
-    version = await init.init()
-    major_version = int(version.split(".")[0])
-    logger.info("init done")
 
-    process = None
-    address = None
-    port = None
-    if major_version >= 17:
-        logger.info("trying to start tunnel")
-        original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        process, address, port = tunnel.tunnel()
-        signal.signal(signal.SIGINT, original_sigint_handler)
+async def mount_legacy_image(serial):
+    logger.info("正在挂载旧版设备所需的开发者磁盘镜像…")
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "pymobiledevice3", "mounter", "auto-mount", "--udid", serial
+    )
     try:
-        logger.debug(f"tunnel address: {address}, port: {port}")
-
-        loc = route.get_route()
-        logger.info(f"got route from {config.config.routeConfig}")
-
-        try:
-            print(f"已开始模拟跑步，速度大约为 {config.config.v} m/s")
-            print("会无限循环，按 Ctrl+C 退出")
-            print("请勿直接关闭窗口，否则无法还原正常定位")
-            if major_version >= 17:
-                await run.run(address, port, loc, config.config.v)
-            else:
-                await run.run_legacy(loc, config.config.v)
-        except KeyboardInterrupt:
-            logger.debug("get KeyboardInterrupt (inner)")
-            if process is not None:
-                logger.debug(f"Is process alive? {process.is_alive()}")
-        finally:
-            if process is not None:
-                logger.debug(f"Is process alive? {process.is_alive()}")
-            logger.debug("Start to clear location")
-
-    except KeyboardInterrupt:
-        logger.debug("get KeyboardInterrupt (outer)")
+        if await process.wait() != 0:
+            raise RuntimeError(
+                "开发者磁盘镜像挂载失败。请检查设备连接、信任状态和开发者模式。"
+                "如果已手动挂载，请使用 --skip-mount 重试。"
+            )
     finally:
-        if process is not None:
-            logger.debug(f"Is process alive? {process.is_alive()}")
-            logger.debug("terminating tunnel process")
-            process.terminate()
-            logger.info("tunnel process terminated")
-        print("Bye")
+        if process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), 3)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+
+
+async def main(skip_mount=False):
+    settings = config.Config()
+    path = Path(settings.routeConfig)
+    points, source_system = load_route(path)
+    speed = float(settings.v)
+    interval = float(getattr(settings, "updateInterval", 0.2))
+    coordinate_system = source_system or getattr(settings, "coordinateSystem", "bd09")
+    if not 0.1 <= speed <= 30 or not 0.1 <= interval <= 10:
+        raise ValueError("速度需为 0.1–30 m/s，定位间隔需为 0.1–10 秒。")
+    distance = route_length([run.to_wgs84(point, coordinate_system) for point in points])
+    if not math.isfinite(distance) or distance <= 0:
+        raise ValueError("路线长度需大于零。")
+    # The legacy sampler materializes one lap and varies speed by up to 2×.
+    raw_distance = route_length(points)
+    samples_per_lap = max(distance, raw_distance) / speed / interval
+    if samples_per_lap > 125_000:
+        raise ValueError("单圈定位点太多。请选择更短的路线、提高速度或增大定位间隔。")
+
+    version, serial = await init.init(include_serial=True)
+    version_number = device_version(version)
+    if version_number is None:
+        raise RuntimeError("无法读取设备系统版本。请解锁并重新连接设备。")
+    if (17, 0) <= version_number < (17, 4):
+        raise RuntimeError("命令行的 USB 隧道需要 iOS 或 iPadOS 17.4 及以上版本。")
+    if version_number < (17, 0) and not skip_mount:
+        await mount_legacy_image(serial)
+
+    logger.info("路线 %s · 每圈 %.1f 米 · %s · 更新间隔 %.2f 秒", path.name, distance, coordinate_system, interval)
+    print(f"将以约 {speed:g} m/s 循环回放路线。按 Ctrl+C 停止并尝试恢复定位。")
+    options = {"update_interval": interval, "coordinate_system": coordinate_system, "clear_on_finish": True}
+    if version_number >= (17, 4):
+        async with tunnel.tunnel(serial) as (address, port):
+            await run.run(address, port, points, speed, **options)
+    else:
+        await run.run_legacy(points, speed, serial=serial, **options)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="iOSRealRun 路线模拟")
+    parser.add_argument("--skip-mount", action="store_true", help="跳过 iOS 17 以下设备的开发者磁盘镜像挂载")
+    args = parser.parse_args()
+    configure_logging()
+    try:
+        asyncio.run(main(skip_mount=args.skip_mount))
+    except KeyboardInterrupt:
+        print("回放已停止。")
+    except (PyMobileDevice3Exception, DTXNsError, DTXProtocolError, YAMLError,
+            OSError, EOFError, ValueError, TypeError, AttributeError, ArithmeticError, RuntimeError) as error:
+        logger.error("%s", str(error) or type(error).__name__)
+        raise SystemExit(1) from None

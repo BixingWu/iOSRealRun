@@ -1,57 +1,20 @@
-import re
-import sys
-import logging
-import subprocess
-import multiprocessing
+"""Own the elevated command-line tunnel for the duration of a replay."""
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+import asyncio
+from contextlib import AsyncExitStack, asynccontextmanager
 
-def start_tunnel(queue):
-    command = [sys.executable, '-m', 'pymobiledevice3', 'lockdown', 'start-tunnel']
+from pymobiledevice3.lockdown import create_using_usbmux
+from pymobiledevice3.remote.tunnel_service import CoreDeviceTunnelProxy
 
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
 
-    logging.info("Tunnel started")
-
-    rsd_pattern = re.compile(r"--rsd (\S+) (\d+)")
-    address, port = None, None
-
-    while True:
-        output = process.stdout.readline().strip()
-        if output:
-            logging.info(output)
-
-        match = rsd_pattern.search(output)
-        if match:
-            address, port = match.group(1), int(match.group(2))
-            queue.put((address, port))
-            logging.info(f"RSD Address: {address}, RSD Port: {port}")
-            break
-
-    process.wait()
-
-def tunnel():
-    queue = multiprocessing.Queue()
-    process = multiprocessing.Process(target=start_tunnel, args=(queue,))
-    process.start()
-    
-    try:
-        result = queue.get(timeout=20)
-        if result is None:
-            raise RuntimeError("❌ 无法建立隧道连接")
-        address, port = result
-        
-        return process, address, port
-    except Exception as e:
-        logging.error(f"❌ 隧道建立失败: {e}")
-        process.terminate()
-        process.join(timeout=2)
-        if process.is_alive():
-            process.kill()
-
-    return None, None, None
+@asynccontextmanager
+async def tunnel(serial=None):
+    async with AsyncExitStack() as stack:
+        lockdown = await asyncio.wait_for(
+            create_using_usbmux(serial=serial, connection_type="USB", autopair=False), 10
+        )
+        await stack.enter_async_context(lockdown)
+        proxy = await asyncio.wait_for(CoreDeviceTunnelProxy.create(lockdown), 10)
+        stack.push_async_callback(proxy.close)
+        result = await asyncio.wait_for(stack.enter_async_context(proxy.start_tcp_tunnel()), 20)
+        yield result.address, result.port

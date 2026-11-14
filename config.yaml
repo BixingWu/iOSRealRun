@@ -1,4 +1,8 @@
 v: 4.4
 routeConfig: "ZJGEast.txt"
+# 路线文件的原始坐标系：bd09（百度）、gcj02（高德/腾讯）或 wgs84（GPS）
+coordinateSystem: "bd09"
+# 定位更新间隔（秒）。个人设置可写入 config.local.yaml。
+updateInterval: 1.0
 libimobiledeviceDir: "libimobiledevice"
 imageDir: "DeveloperDiskImage"

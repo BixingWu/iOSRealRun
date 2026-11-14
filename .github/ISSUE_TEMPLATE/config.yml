@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 使用说明和常见问题
+    url: https://github.com/BixingWu/iOSRealRun-26#常见问题
+    about: 查看安装、设备信任、坐标系和定位恢复的处理步骤

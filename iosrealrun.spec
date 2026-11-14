@@ -1,0 +1,89 @@
+import os
+import re
+import runpy
+import sys
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata, get_package_paths
+
+
+project = Path(SPECPATH)
+version = runpy.run_path(str(project / "app_version.py"))["VERSION"]
+route_files = ("ZJGEast.txt", "ZJGWest.txt", "YuQuan.txt", "HaiNing.txt", "XiXi.txt", "YQ.txt")
+data = [(str(project / filename), ".") for filename in route_files]
+# Preserve dependency notices. Some device dependencies also query metadata at runtime.
+data += copy_metadata("pymobiledevice3", recursive=True)
+data += copy_metadata("geopy", recursive=True)
+data += copy_metadata("PyYAML")
+data += copy_metadata("PySide6-Essentials", recursive=True)
+data += collect_data_files("pymobiledevice3", subdir="resources")
+
+binaries = []
+icon = None
+if sys.platform == "win32":
+    # Importing the userspace tunnel also loads Wintun on Windows.
+    wintun = Path(get_package_paths("pytun_pmd3")[1]) / "wintun"
+    data += [(str(wintun / "LICENSE.txt"), "pytun_pmd3/wintun")]
+    binaries += [(str(wintun / "bin" / "amd64" / "wintun.dll"), "pytun_pmd3/wintun/bin/amd64")]
+    qt_root = Path(get_package_paths("PySide6")[1])
+    vc_runtime = {name: qt_root / name for name in ("vcruntime140.dll", "vcruntime140_1.dll")}
+    for path in vc_runtime.values():
+        if not path.is_file():
+            raise FileNotFoundError(f"Qt's Visual C++ runtime DLL was not found: {path}")
+    icon = str(project / "assets" / "app.ico")
+
+analysis = Analysis(
+    [str(project / "desktop.py")],
+    pathex=[str(project)],
+    binaries=binaries,
+    datas=data,
+    hiddenimports=[
+        "pymobiledevice3.remote.userspace_tunnel",
+        # PyInstaller's PySide6 hook checks for the optional meta-distribution.
+        "PySide6.support.deprecated",
+    ],
+    excludes=["tkinter"],
+)
+if sys.platform == "win32":
+    # Windows 10+ supplies the UCRT and ICU implementations that Qt expects.
+    # An unrelated ICU from the build machine can shadow those APIs at runtime.
+    windows_dll = re.compile(r"(?:icu(?:dt|in|uc)?\d*|ucrtbase|api-ms-win-.*|ext-ms-win-.*)\.dll", re.I)
+    analysis.binaries = [
+        (destination, str(vc_runtime.get(Path(destination).name.lower(), source)), kind)
+        for destination, source, kind in analysis.binaries
+        if not windows_dll.fullmatch(Path(destination).name)
+    ]
+    # Python loads from the bundle root before Qt imports its own runtime DLLs.
+    existing_runtime = {destination.lower() for destination, _, _ in analysis.binaries}
+    analysis.binaries.extend(
+        (name, str(path), "BINARY") for name, path in vc_runtime.items() if name not in existing_runtime
+    )
+archive = PYZ(analysis.pure)
+executable = EXE(
+    archive,
+    analysis.scripts,
+    [],
+    exclude_binaries=True,
+    name="iOSRealRun",
+    icon=icon,
+    console=sys.platform == "linux" or os.environ.get("IOSREALRUN_BUILD_CONSOLE") == "1",
+    upx=False,
+)
+app = COLLECT(
+    executable,
+    analysis.binaries,
+    analysis.datas,
+    upx=False,
+    name="iOSRealRun",
+)
+
+if sys.platform == "darwin":
+    desktop_version = version.split("-", 1)[0]
+    app = BUNDLE(
+        app,
+        name="iOSRealRun.app",
+        icon=str(project / "assets" / "app.icns"),
+        bundle_identifier="com.github.BixingWu.iOSRealRun",
+        version=desktop_version,
+        info_plist={"CFBundleVersion": desktop_version, "LSMinimumSystemVersion": "15.0"},
+    )

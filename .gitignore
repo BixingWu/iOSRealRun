@@ -2,6 +2,12 @@
 
 __pycache__/
 .pvenv/
+.pvenv.broken/
+.pvenv.broken-*/
+.pvenv.lock
 .venv/
+/.venv-build/
+/dist/
+/config.local.yaml
 *.pyc
 *.log

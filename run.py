@@ -8,9 +8,12 @@ import math
 import time
 import random
 import asyncio
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 
 from geopy.distance import geodesic
 
+from pymobiledevice3.dtx.exceptions import DTXNsError, DTXProtocolError
+from pymobiledevice3.exceptions import PyMobileDevice3Exception
 from pymobiledevice3.lockdown import create_using_usbmux
 from pymobiledevice3.remote.remote_service_discovery import RemoteServiceDiscoveryService
 from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
@@ -61,6 +64,47 @@ def bd09Towgs84(position):
     wgs_p["lat"] = gcj_lat * 2 - gcj_lat - d_lat
     wgs_p["lng"] = gcj_lng * 2 - gcj_lng - d_lng
     return wgs_p
+
+
+def _gcj02_to_wgs84(gcj_lat, gcj_lng):
+    """Convert a GCJ-02 coordinate to WGS84."""
+    pi = math.pi
+    a = 6378245.0
+    ee = 0.00669342162296594323
+
+    def transform_lat(x, y):
+        ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
+        ret += (20.0 * math.sin(6.0 * x * pi) + 20.0 * math.sin(2.0 * x * pi)) * 2.0 / 3.0
+        ret += (20.0 * math.sin(y * pi) + 40.0 * math.sin(y / 3.0 * pi)) * 2.0 / 3.0
+        ret += (160.0 * math.sin(y / 12.0 * pi) + 320 * math.sin(y * pi / 30.0)) * 2.0 / 3.0
+        return ret
+
+    def transform_lon(x, y):
+        ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
+        ret += (20.0 * math.sin(6.0 * x * pi) + 20.0 * math.sin(2.0 * x * pi)) * 2.0 / 3.0
+        ret += (20.0 * math.sin(x * pi) + 40.0 * math.sin(x / 3.0 * pi)) * 2.0 / 3.0
+        ret += (150.0 * math.sin(x / 12.0 * pi) + 300.0 * math.sin(x / 30.0 * pi)) * 2.0 / 3.0
+        return ret
+
+    d_lat = transform_lat(gcj_lng - 105.0, gcj_lat - 35.0)
+    d_lng = transform_lon(gcj_lng - 105.0, gcj_lat - 35.0)
+    rad_lat = gcj_lat / 180.0 * pi
+    magic = 1 - ee * math.sin(rad_lat) ** 2
+    sqrt_magic = math.sqrt(magic)
+    d_lng = d_lng * 180.0 / (a / sqrt_magic * math.cos(rad_lat) * pi)
+    d_lat = d_lat * 180.0 / (a * (1 - ee) / (magic * sqrt_magic) * pi)
+    return {"lat": gcj_lat - d_lat, "lng": gcj_lng - d_lng}
+
+
+def to_wgs84(position, coordinate_system="bd09"):
+    system = coordinate_system.lower().replace("-", "")
+    if system == "bd09":
+        return bd09Towgs84(position)
+    if system == "gcj02":
+        return _gcj02_to_wgs84(position["lat"], position["lng"])
+    if system == "wgs84":
+        return {"lat": position["lat"], "lng": position["lng"]}
+    raise ValueError(f"Unsupported coordinate system: {coordinate_system}")
 
 # get the ditance according to the latitude and longitude
 def geodistance(p1, p2):
@@ -139,7 +183,8 @@ def fixLockT(loc: list, v, dt):
             t += dt
     return fixedLoc
 
-async def run1(location_simulation, loc: list, v, dt=0.2, stop_requested=None):
+async def run1(location_simulation, loc: list, v, dt=0.2,
+               coordinate_system="bd09", stop_requested=None):
     fixedLoc = fixLockT(loc, v, dt)
     nList = (5, 6, 7, 8, 9)
     n = nList[random.randint(0, len(nList)-1)]
@@ -148,7 +193,7 @@ async def run1(location_simulation, loc: list, v, dt=0.2, stop_requested=None):
     for i in fixedLoc:
         if stop_requested is not None and stop_requested():
             return False
-        wgs = bd09Towgs84(i)
+        wgs = to_wgs84(i, coordinate_system)
         await location_simulation.set(wgs["lat"], wgs["lng"])
         await asyncio.sleep(max(0, dt - (time.time() - clock)))
         clock = time.time()
@@ -159,39 +204,79 @@ def _should_continue(loop_count, loop_index, stop_requested):
         return False
     return not loop_count or loop_index < loop_count
 
-async def _run_with_location_simulation(location_simulation, loc: list, v, d=15, loop_count=0, stop_requested=None):
+async def _run_with_location_simulation(location_simulation, loc: list, v, d=15,
+                                        loop_count=0, stop_requested=None,
+                                        update_interval=0.2,
+                                        coordinate_system="bd09"):
     loop_index = 0
     while _should_continue(loop_count, loop_index, stop_requested):
         loop_index += 1
-        vRand = 1000/(1000/v-(2*random.random()-1)*d)
-        completed = await run1(location_simulation, loc, vRand, stop_requested=stop_requested)
+        pace_factor = max(0.5, 1 - (2 * random.random() - 1) * d * (v / 1000))
+        vRand = v / pace_factor
+        completed = await run1(
+            location_simulation, loc, vRand, dt=update_interval,
+            coordinate_system=coordinate_system,
+            stop_requested=stop_requested
+        )
         if not completed:
             break
         print("跑完一圈了")
 
-async def run(address, port, loc: list, v, d=15, loop_count=0, stop_requested=None, clear_on_finish=False):
+@asynccontextmanager
+async def dvt_location(rsd):
+    dvt = DvtProvider(rsd)
+    async with AsyncExitStack() as stack:
+        stack.push_async_callback(dvt.close)
+        # v11.54.0 handles its own 15-second handshake timeout, yet leaves a
+        # partial DTX connection open if its connect coroutine is cancelled.
+        connecting = asyncio.create_task(dvt.connect())
+        try:
+            await asyncio.shield(connecting)
+        except asyncio.CancelledError:
+            with suppress(PyMobileDevice3Exception, OSError, EOFError, DTXNsError, DTXProtocolError):
+                await connecting
+            raise
+        location = await asyncio.wait_for(stack.enter_async_context(LocationSimulation(dvt)), 8)
+        yield location
+
+
+async def run(address, port, loc: list, v, d=15, loop_count=0,
+              stop_requested=None, clear_on_finish=False,
+              update_interval=0.2, coordinate_system="bd09"):
     random.seed(time.time())
     rsd = RemoteServiceDiscoveryService((address, port))
-    await asyncio.sleep(2)
-    await rsd.connect()
-
     try:
-        async with DvtProvider(rsd) as dvt, LocationSimulation(dvt) as location_simulation:
+        await asyncio.wait_for(rsd.connect(), 20)
+        async with dvt_location(rsd) as location_simulation:
             try:
-                await _run_with_location_simulation(location_simulation, loc, v, d, loop_count, stop_requested)
+                await _run_with_location_simulation(
+                    location_simulation, loc, v, d, loop_count, stop_requested,
+                    update_interval, coordinate_system
+                )
             finally:
                 if clear_on_finish:
-                    await location_simulation.clear()
+                    await _restore_location(location_simulation)
     finally:
         await rsd.close()
 
-async def run_legacy(loc: list, v, d=15, loop_count=0, stop_requested=None, clear_on_finish=False):
+async def run_legacy(loc: list, v, d=15, loop_count=0,
+                     stop_requested=None, clear_on_finish=False,
+                     update_interval=0.2, coordinate_system="bd09", *, serial=None):
     random.seed(time.time())
-    lockdown = await create_using_usbmux()
-    location_simulation = DtSimulateLocation(lockdown)
+    async with await create_using_usbmux(serial=serial, connection_type="USB", autopair=False) as lockdown:
+        location_simulation = DtSimulateLocation(lockdown)
+        try:
+            await _run_with_location_simulation(
+                location_simulation, loc, v, d, loop_count, stop_requested,
+                update_interval, coordinate_system
+            )
+        finally:
+            if clear_on_finish:
+                await _restore_location(location_simulation)
+
+
+async def _restore_location(location_simulation):
     try:
-        await _run_with_location_simulation(location_simulation, loc, v, d, loop_count, stop_requested)
-    finally:
-        if clear_on_finish:
-            await location_simulation.clear()
-        await lockdown.close()
+        await asyncio.wait_for(location_simulation.clear(), 8)
+    except Exception as error:
+        raise RuntimeError(f"未能恢复设备定位。重新连接设备后请重试恢复定位。{error}") from error

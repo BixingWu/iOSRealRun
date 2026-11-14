@@ -1,8 +1,7 @@
-import config
+from config import Config
+from desktop_routes import load_route
 
-from util import route
 
 def get_route():
-    with open(config.config.routeConfig) as myFile:
-        loc = route.parse_route(myFile.read())
-    return loc  
+    points, _ = load_route(Config().routeConfig)
+    return points
