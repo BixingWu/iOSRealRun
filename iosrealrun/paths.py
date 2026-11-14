@@ -9,7 +9,6 @@ BUNDLED_ROUTES = {
     "紫金港东操场": "ZJGEast.txt",
     "紫金港西操场": "ZJGWest.txt",
     "玉泉操场": "YuQuan.txt",
-    "玉泉操场 · YQ": "YQ.txt",
     "西溪操场": "XiXi.txt",
     "海宁操场": "HaiNing.txt",
 }
@@ -32,6 +31,8 @@ def resolve_route(value, config_dir):
     if path.is_absolute():
         return path
     candidate = config_dir / path
-    if path.parent in (Path("."), Path("routes")) and path.name in BUNDLED_ROUTES.values() and not candidate.is_file():
-        return bundled_route(path.name)
+    if path.parent in (Path("."), Path("routes")) and not candidate.is_file():
+        filename = "YuQuan.txt" if path.name == "YQ.txt" else path.name
+        if filename in BUNDLED_ROUTES.values():
+            return bundled_route(filename)
     return candidate

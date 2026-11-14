@@ -65,6 +65,30 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(Path(config.Config().routeConfig), custom)
             self.assertEqual(paths.resolve_route("my-routes/YuQuan.txt", self.root), self.root / "my-routes/YuQuan.txt")
 
+    def test_removed_yq_preset_uses_yuquan_without_shadowing_custom_routes(self):
+        bundled = self.root / "_internal"
+        (bundled / "routes").mkdir(parents=True)
+        replacement = bundled / "routes" / "YuQuan.txt"
+        replacement.write_text("preset", encoding="utf-8")
+        with patch.object(paths, "RESOURCE_ROOT", bundled):
+            for filename in ("YQ.txt", "routes/YQ.txt"):
+                with self.subTest(filename=filename):
+                    self.assertEqual(paths.resolve_route(filename, self.root), replacement)
+                    custom = self.root / filename
+                    custom.parent.mkdir(exist_ok=True)
+                    custom.write_text("custom", encoding="utf-8")
+                    self.assertEqual(paths.resolve_route(filename, self.root), custom)
+            other = self.root / "my-routes" / "YQ.txt"
+            self.assertEqual(paths.resolve_route("my-routes/YQ.txt", self.root), other)
+            self.assertEqual(paths.resolve_route(other, self.root), other)
+
+    def test_cli_migrates_removed_yq_preset_from_legacy_config(self):
+        with patch.object(paths, "RESOURCE_ROOT", self.root):
+            for filename in ("YQ.txt", "routes/YQ.txt"):
+                with self.subTest(filename=filename):
+                    (self.root / "config.local.yaml").write_text(f"routeConfig: {filename}\n", encoding="utf-8")
+                    self.assertEqual(Path(config.Config().routeConfig), self.root / "routes" / "YuQuan.txt")
+
 
 if __name__ == "__main__":
     unittest.main()

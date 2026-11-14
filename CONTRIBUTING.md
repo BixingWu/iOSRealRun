@@ -1,6 +1,6 @@
 # 参与 iOSRealRun 开发
 
-遇到问题先看 [README 的使用方法](README.md#使用方法)和[常见问题](README.md#常见问题)。如果仍能复现，请[提交问题报告](https://github.com/BixingWu/iOSRealRun/issues/new?template=bug_report.yml)，注明它发生在启动、设备连接、路线导入、回放还是恢复定位时。
+遇到问题先看 [README 的使用方法](README.md#使用方法)和[常见问题](docs/usage.md#常见问题)。如果仍能复现，请[提交问题报告](https://github.com/BixingWu/iOSRealRun/issues/new?template=bug_report.yml)，注明它发生在启动、设备连接、路线导入、回放还是恢复定位时。
 
 日常修改请新建分支，再提交 Pull Request 到 `main`。合并前需通过 `Windows checks / test`，并与主分支保持同步。合并后，GitHub 会自动清理仓库内已合并的功能分支。
 
@@ -24,6 +24,32 @@ python -m iosrealrun --self-test
 提交 PR 时说明用户会看到的变化、涉及的平台，以及实际运行过的测试。如果改的是打包或安装流程，请在目标系统上从生成的包启动一次，记录系统版本和 CPU 架构。
 
 应用代码在 [iosrealrun/](iosrealrun/)，内置路线在 [routes/](routes/)，启动和打包脚本在 [scripts/](scripts/)。个人配置请写在根目录的 `config.local.yaml`，公开默认值在 [config.example.yaml](config.example.yaml)。
+
+## 构建便携包
+
+在目标系统上使用独立的 Python 3.12 环境构建，Windows 和 Linux 使用 x64，macOS 使用 ARM64。
+
+Windows：
+
+```powershell
+py -3.12 -m venv .venv-build
+.\.venv-build\Scripts\python.exe -m pip install -r scripts\requirements-build.txt
+.\scripts\Build-Windows.ps1 -Python .\.venv-build\Scripts\python.exe
+```
+
+macOS / Linux：
+
+```sh
+python3.12 -m venv .venv-build
+./.venv-build/bin/python -m pip install -r scripts/requirements-build.txt
+./.venv-build/bin/python scripts/build_portable.py
+```
+
+输出在 `dist/<平台>-*/`。构建脚本会检查打包后的程序，再生成压缩包。应用版本在 [iosrealrun/app_version.py](iosrealrun/app_version.py) 中定义，发布说明放在 `docs/releases/`。
+
+GitHub Actions 在三个系统上运行测试和打包；推送对应版本标签时创建 Release，并附带校验清单。[Actions 开发构建](https://github.com/BixingWu/iOSRealRun/actions/workflows/windows-build.yml)的 Artifacts 下载需要登录 GitHub。
+
+更新 Qt 或设备通信依赖后，请检查界面启动与交互，以及设备信任、开发者模式、连接取消、暂停、停止和恢复定位。
 
 ## 真机兼容性反馈
 
