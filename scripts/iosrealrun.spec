@@ -7,10 +7,12 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata, get_package_paths
 
 
-project = Path(SPECPATH)
-version = runpy.run_path(str(project / "app_version.py"))["VERSION"]
+scripts = Path(SPECPATH)
+project = scripts.parent
+version = runpy.run_path(str(project / "iosrealrun/app_version.py"))["VERSION"]
 route_files = ("ZJGEast.txt", "ZJGWest.txt", "YuQuan.txt", "HaiNing.txt", "XiXi.txt", "YQ.txt")
-data = [(str(project / filename), ".") for filename in route_files]
+data = [(str(project / "routes" / filename), "routes") for filename in route_files]
+data += [(str(project / "config.example.yaml"), ".")]
 # Preserve dependency notices. Some device dependencies also query metadata at runtime.
 data += copy_metadata("pymobiledevice3", recursive=True)
 data += copy_metadata("geopy", recursive=True)
@@ -33,7 +35,7 @@ if sys.platform == "win32":
     icon = str(project / "assets" / "app.ico")
 
 analysis = Analysis(
-    [str(project / "desktop.py")],
+    [str(scripts / "desktop_entry.py")],
     pathex=[str(project)],
     binaries=binaries,
     datas=data,

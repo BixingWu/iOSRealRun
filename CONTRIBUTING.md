@@ -2,7 +2,7 @@
 
 遇到问题先看 [README 的使用方法](README.md#使用方法)和[常见问题](README.md#常见问题)。如果仍能复现，请[提交问题报告](https://github.com/BixingWu/iOSRealRun/issues/new?template=bug_report.yml)，注明它发生在启动、设备连接、路线导入、回放还是恢复定位时。
 
-日常修改请新建分支，再提交 Pull Request 到 `main`。合并前需通过 `Windows checks / test`，并与主分支保持同步。
+日常修改请新建分支，再提交 Pull Request 到 `main`。合并前需通过 `Windows checks / test`，并与主分支保持同步。合并后，GitHub 会自动清理仓库内已合并的功能分支。
 
 ## 本地开发
 
@@ -11,17 +11,19 @@
 ```sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python desktop.py
+.venv/bin/python -m iosrealrun
 ```
 
 测试无需连接 iPhone 或 iPad。运行前将 `QT_QPA_PLATFORM` 设为 `offscreen`（PowerShell 用 `$env:QT_QPA_PLATFORM = "offscreen"`，Bash 或 Zsh 用 `export QT_QPA_PLATFORM=offscreen`）。用虚拟环境内的 Python 执行：
 
 ```sh
 python -m unittest discover -s tests
-python desktop.py --self-test
+python -m iosrealrun --self-test
 ```
 
 提交 PR 时说明用户会看到的变化、涉及的平台，以及实际运行过的测试。如果改的是打包或安装流程，请在目标系统上从生成的包启动一次，记录系统版本和 CPU 架构。
+
+应用代码在 [iosrealrun/](iosrealrun/)，内置路线在 [routes/](routes/)，启动和打包脚本在 [scripts/](scripts/)。个人配置请写在根目录的 `config.local.yaml`，公开默认值在 [config.example.yaml](config.example.yaml)。
 
 ## 真机兼容性反馈
 

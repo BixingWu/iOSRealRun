@@ -11,11 +11,10 @@ from yaml import YAMLError
 from pymobiledevice3.dtx.exceptions import DTXNsError, DTXProtocolError
 from pymobiledevice3.exceptions import PyMobileDevice3Exception
 
-import config
-import run
-from desktop_routes import load_route, route_length
-from driver.connect import device_version
-from init import init, tunnel
+from iosrealrun import config, run
+from iosrealrun.desktop_routes import load_route, route_length
+from iosrealrun.driver.connect import device_version
+from iosrealrun.init import init, tunnel
 
 
 logger = logging.getLogger(__name__)

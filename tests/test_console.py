@@ -2,19 +2,18 @@ import asyncio
 import io
 import unittest
 from contextlib import asynccontextmanager, redirect_stdout
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pymobiledevice3.exceptions import NoDeviceConnectedError
 
-import main
-import run
-from driver import connect
-from init import tunnel
+from iosrealrun import main, run
+from iosrealrun.driver import connect
+from iosrealrun.init import tunnel
+from iosrealrun.paths import bundled_route
 
 
-ROUTE = Path(__file__).resolve().parents[1] / "ZJGEast.txt"
+ROUTE = bundled_route("ZJGEast.txt")
 
 
 class ConsoleTests(unittest.IsolatedAsyncioTestCase):
@@ -23,8 +22,8 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(speed=speed, interval=interval):
                 settings = SimpleNamespace(routeConfig=ROUTE, v=speed, updateInterval=interval)
                 with (
-                    patch("main.config.Config", return_value=settings),
-                    patch("main.init.init", AsyncMock()) as initialize,
+                    patch("iosrealrun.main.config.Config", return_value=settings),
+                    patch("iosrealrun.main.init.init", AsyncMock()) as initialize,
                 ):
                     with self.assertRaisesRegex(ValueError, "速度"):
                         await main.main()
@@ -37,11 +36,11 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         with (
             io.TextIOWrapper(io.BytesIO(), encoding="cp1252") as output,
             redirect_stdout(output),
-            self.assertLogs("main", level="INFO") as logs,
-            patch("main.config.Config", return_value=settings),
-            patch("main.init.init", AsyncMock(return_value=("16.7.1", "legacy-device"))),
-            patch("main.mount_legacy_image", mount),
-            patch("main.run.run_legacy", replay),
+            self.assertLogs("iosrealrun.main", level="INFO") as logs,
+            patch("iosrealrun.main.config.Config", return_value=settings),
+            patch("iosrealrun.main.init.init", AsyncMock(return_value=("16.7.1", "legacy-device"))),
+            patch("iosrealrun.main.mount_legacy_image", mount),
+            patch("iosrealrun.main.run.run_legacy", replay),
         ):
             await main.main()
             self.assertEqual(output.tell(), 0)
@@ -57,8 +56,8 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         with (
             io.TextIOWrapper(io.BytesIO(), encoding="cp1252") as output,
             redirect_stdout(output),
-            self.assertLogs("driver.connect", level="INFO") as logs,
-            patch("driver.connect.create_using_usbmux", find_device),
+            self.assertLogs("iosrealrun.driver.connect", level="INFO") as logs,
+            patch("iosrealrun.driver.connect.create_using_usbmux", find_device),
             patch("builtins.input", return_value="") as prompt,
         ):
             self.assertIs(await connect.get_usbmux_lockdownclient(), unlocked)
@@ -72,8 +71,8 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         with (
             io.TextIOWrapper(io.BytesIO(), encoding="cp1252") as output,
             redirect_stdout(output),
-            self.assertLogs("run", level="INFO") as logs,
-            patch("run.run1", AsyncMock(return_value=True)),
+            self.assertLogs("iosrealrun.run", level="INFO") as logs,
+            patch("iosrealrun.run.run1", AsyncMock(return_value=True)),
         ):
             await run._run_with_location_simulation(object(), [], 4.4, loop_count=1)
             self.assertEqual(output.tell(), 0)
@@ -83,9 +82,9 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         lockdown = MagicMock()
         location = SimpleNamespace(clear=AsyncMock(side_effect=OSError("device disconnected")))
         with (
-            patch("run.create_using_usbmux", AsyncMock(return_value=lockdown)),
-            patch("run.DtSimulateLocation", return_value=location),
-            patch("run._run_with_location_simulation", AsyncMock()),
+            patch("iosrealrun.run.create_using_usbmux", AsyncMock(return_value=lockdown)),
+            patch("iosrealrun.run.DtSimulateLocation", return_value=location),
+            patch("iosrealrun.run._run_with_location_simulation", AsyncMock()),
         ):
             with self.assertRaisesRegex(RuntimeError, "未能恢复设备定位"):
                 await run.run_legacy([], 4.4, clear_on_finish=True, serial="legacy-device")
@@ -114,8 +113,8 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         proxy = SimpleNamespace(start_tcp_tunnel=proxy_context, close=close_proxy)
         create_lockdown = AsyncMock(return_value=lockdown_context())
         with (
-            patch("init.tunnel.create_using_usbmux", create_lockdown),
-            patch("init.tunnel.CoreDeviceTunnelProxy.create", AsyncMock(return_value=proxy)),
+            patch("iosrealrun.init.tunnel.create_using_usbmux", create_lockdown),
+            patch("iosrealrun.init.tunnel.CoreDeviceTunnelProxy.create", AsyncMock(return_value=proxy)),
         ):
             with self.assertRaises(asyncio.CancelledError):
                 async with tunnel.tunnel("expected-device") as address:

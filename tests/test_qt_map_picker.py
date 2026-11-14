@@ -10,8 +10,8 @@ from PySide6.QtGui import QColor, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
-from map_picker import MAX_ZOOM
-from qt_map_picker import open_map_picker
+from iosrealrun.map_picker import MAX_ZOOM
+from iosrealrun.qt_map_picker import open_map_picker
 
 
 class _TileLoader:
@@ -123,7 +123,7 @@ class QtMapPickerTests(unittest.TestCase):
 
     def test_offline_tiles_keep_drawing_available_and_closing_stops_loader(self):
         loader = _TileLoader()
-        with patch("qt_map_picker._TileLoader", return_value=loader):
+        with patch("iosrealrun.qt_map_picker._TileLoader", return_value=loader):
             picker = self.make_picker(load_tiles=True)
         canvas = picker.canvas
         canvas._debounce.stop()
@@ -146,7 +146,7 @@ class QtMapPickerTests(unittest.TestCase):
 
     def test_tile_pixmap_is_decoded_on_gui_thread(self):
         loader = _TileLoader()
-        with patch("qt_map_picker._TileLoader", return_value=loader):
+        with patch("iosrealrun.qt_map_picker._TileLoader", return_value=loader):
             picker = self.make_picker(load_tiles=True)
         canvas = picker.canvas
         from PySide6.QtCore import QBuffer, QByteArray, QIODevice

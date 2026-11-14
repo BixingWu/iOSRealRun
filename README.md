@@ -39,6 +39,8 @@ Release 同时提供 `SHA256SUMS.txt`，便于检查文件是否下载完整。W
 
 [Actions](https://github.com/BixingWu/iOSRealRun/actions/workflows/windows-build.yml) 保留开发构建；其中的 Artifacts 下载需要登录 GitHub。**Code → Download ZIP** 下载的是源码，需按下方[源码启动](#从源码启动)步骤使用。
 
+下方的源码目录和命令适用于当前主分支。已发布的 beta.2 压缩包沿用上表所示的启动方式。
+
 ### 2. 连接设备
 
 1. Windows 需要 Apple 的设备驱动。没有安装过的电脑先安装 [Apple Devices 或 iTunes](https://support.apple.com/118290)，确认它能识别设备。
@@ -89,12 +91,12 @@ Release 同时提供 `SHA256SUMS.txt`，便于检查文件是否下载完整。W
 
 | 界面名称 | 文件 | 坐标系 |
 | --- | --- | --- |
-| 紫金港东操场 | [ZJGEast.txt](https://github.com/BixingWu/iOSRealRun/blob/main/ZJGEast.txt) | BD-09 |
-| 紫金港西操场 | [ZJGWest.txt](https://github.com/BixingWu/iOSRealRun/blob/main/ZJGWest.txt) | BD-09 |
-| 玉泉操场 | [YuQuan.txt](https://github.com/BixingWu/iOSRealRun/blob/main/YuQuan.txt) | BD-09 |
-| 玉泉操场 · YQ | [YQ.txt](https://github.com/BixingWu/iOSRealRun/blob/main/YQ.txt) | BD-09 |
-| 西溪操场 | [XiXi.txt](https://github.com/BixingWu/iOSRealRun/blob/main/XiXi.txt) | BD-09 |
-| 海宁操场 | [HaiNing.txt](https://github.com/BixingWu/iOSRealRun/blob/main/HaiNing.txt) | BD-09 |
+| 紫金港东操场 | [ZJGEast.txt](https://github.com/BixingWu/iOSRealRun/blob/main/routes/ZJGEast.txt) | BD-09 |
+| 紫金港西操场 | [ZJGWest.txt](https://github.com/BixingWu/iOSRealRun/blob/main/routes/ZJGWest.txt) | BD-09 |
+| 玉泉操场 | [YuQuan.txt](https://github.com/BixingWu/iOSRealRun/blob/main/routes/YuQuan.txt) | BD-09 |
+| 玉泉操场 · YQ | [YQ.txt](https://github.com/BixingWu/iOSRealRun/blob/main/routes/YQ.txt) | BD-09 |
+| 西溪操场 | [XiXi.txt](https://github.com/BixingWu/iOSRealRun/blob/main/routes/XiXi.txt) | BD-09 |
+| 海宁操场 | [HaiNing.txt](https://github.com/BixingWu/iOSRealRun/blob/main/routes/HaiNing.txt) | BD-09 |
 
 这些是选取的示例路线，不是测绘数据。使用前请检查预览、坐标系和起终点。
 
@@ -169,16 +171,16 @@ GPX 支持单条连续轨迹或路线，不支持直接拼接多条轨迹、多�
 ```sh
 python3.12 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
-./.venv/bin/python desktop.py
+./.venv/bin/python -m iosrealrun
 ```
 
 ### 默认配置与命令行
 
-公开默认值在 [config.yaml](https://github.com/BixingWu/iOSRealRun/blob/main/config.yaml)。自己的设置可写到同目录的 `config.local.yaml`，覆盖对应项；这个文件不会提交到 Git。路线已在本机保存时，桌面版优先恢复最近使用的路线。
+源码默认值在 [config.example.yaml](config.example.yaml)。可在项目根目录创建 `config.yaml` 覆盖默认值，或将个人设置写入优先级更高的 `config.local.yaml`。两个覆盖文件均由 Git 忽略。路线已在本机保存时，桌面版优先恢复最近使用的路线。
 
 ```yaml
 v: 4.4
-routeConfig: "XiXi.txt"
+routeConfig: "routes/XiXi.txt"
 coordinateSystem: "bd09"
 updateInterval: 1.0
 ```
@@ -196,34 +198,46 @@ Linux 便携版的配置同样放在可执行文件旁。macOS `.app` 则读取 
 macOS 运行：
 
 ```sh
-sudo "$PWD/.venv/bin/python" main.py
+sudo "$PWD/.venv/bin/python" -m iosrealrun.main
 ```
 
-命令行的隧道流程需要管理员 / root 权限。iOS 14–16 会尝试自动挂载开发者磁盘镜像，首次可能需要网络；已手动挂载时，Windows 可加 `-SkipMount`，直接运行 `main.py` 时加 `--skip-mount`。按 `Ctrl+C` 结束，并等待定位清理完成。
+命令行的隧道流程需要管理员 / root 权限。iOS 14–16 会尝试自动挂载开发者磁盘镜像，首次可能需要网络。已手动挂载时，Windows 启动器可加 `-SkipMount`，模块命令可加 `--skip-mount`。按 `Ctrl+C` 结束并等待定位清理完成。
 
 命令行使用相同的速度和更新间隔范围。旧回放器会预先生成一圈的采样点，估算超过 125,000 个时会拒绝运行；遇到这一提示可以缩短路线、增大更新间隔，或使用桌面版。
 
 ## 开发与构建
+
+```text
+iosrealrun/           Python 应用、桌面与命令行入口
+routes/              六条内置示例路线
+scripts/             启动和打包脚本
+assets/              应用图标
+docs/                截图、发布说明和第三方许可说明
+tests/               自动化测试
+config.example.yaml  默认配置
+```
+
+在仓库根目录运行下列命令。应用版本在 [iosrealrun/app_version.py](iosrealrun/app_version.py) 中定义。
 
 桌面界面使用 Qt for Python（PySide6 Essentials 6.10.1），设备库基线为 `pymobiledevice3 11.54.0`。更新它时请同时验证信任、开发者模式、连接取消、暂停 / 停止和恢复定位。
 
 ```powershell
 # 测试和界面自检
 .\.pvenv\Scripts\python.exe -m unittest discover -s tests
-.\.pvenv\Scripts\python.exe desktop.py --self-test
+.\.pvenv\Scripts\python.exe -m iosrealrun --self-test
 
 # 使用独立的 64 位 Python 3.12 环境打包
 py -3.12 -m venv .venv-build
-.\.venv-build\Scripts\python.exe -m pip install -r requirements-build.txt
-.\Build-Windows.ps1 -Python .\.venv-build\Scripts\python.exe
+.\.venv-build\Scripts\python.exe -m pip install -r scripts\requirements-build.txt
+.\scripts\Build-Windows.ps1 -Python .\.venv-build\Scripts\python.exe
 ```
 
 macOS ARM64 和 Linux x64 使用目标平台上的 Python 3.12 构建：
 
 ```sh
 python3.12 -m venv .venv-build
-./.venv-build/bin/python -m pip install -r requirements-build.txt
-./.venv-build/bin/python build_portable.py
+./.venv-build/bin/python -m pip install -r scripts/requirements-build.txt
+./.venv-build/bin/python scripts/build_portable.py
 ```
 
 输出在 `dist/<平台>-*/`。构建脚本会检查打包后的程序，再生成压缩包。GitHub Actions 在三种系统上运行测试和打包；发布标签时生成校验清单并创建 Release。二进制构建产物放在 Actions / Releases，仓库只保留源码、路线、文档和必要图片。
@@ -236,4 +250,4 @@ python3.12 -m venv .venv-build
 
 基于 [iOSRealRun-cli-18](https://github.com/MTDickens/iOSRealRun-cli-18) 修改，桌面操作流程参考 [iOSFakeRun](https://github.com/Mythologyli/iOSFakeRun)，设备通信由 [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) 提供。
 
-项目沿用 [LICENSE](LICENSE) 中的 Mozilla Public License 2.0。便携包附带项目及依赖许可证，各依赖按其自身许可证使用。对应版本的源码和许可见 [第三方组件说明](THIRD_PARTY_NOTICES.md)。OpenStreetMap 底图保留地图署名，不随仓库分发。
+项目沿用 [LICENSE](LICENSE) 中的 Mozilla Public License 2.0。便携包附带项目及依赖许可证，各依赖按其自身许可证使用。对应版本的源码和许可见 [第三方组件说明](docs/third-party-notices.md)。OpenStreetMap 底图保留地图署名，不随仓库分发。

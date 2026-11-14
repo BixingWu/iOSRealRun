@@ -3,15 +3,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from desktop_routes import load_route, parse_route_text, read_last_route, route_length, save_last_route
+from iosrealrun.desktop_routes import load_route, parse_route_text, read_last_route, route_length, save_last_route
 
 
-PROJECT = Path(__file__).resolve().parents[1]
+from iosrealrun.paths import bundled_route
 
 
 class DesktopRouteTests(unittest.TestCase):
     def test_bundled_route_loads(self):
-        points, coordinate_system = load_route(PROJECT / 'ZJGEast.txt')
+        points, coordinate_system = load_route(bundled_route('ZJGEast.txt'))
         self.assertGreater(len(points), 2)
         self.assertIsNone(coordinate_system)
         self.assertIsInstance(points[0]['lat'], float)
@@ -37,9 +37,9 @@ class DesktopRouteTests(unittest.TestCase):
                 parse_route_text(f'[{point}, {{"lat": 31, "lng": 121}}]')
 
     def test_route_limits(self):
-        with patch('desktop_routes.MAX_ROUTE_BYTES', 16), self.assertRaisesRegex(ValueError, '2 MB'):
+        with patch('iosrealrun.desktop_routes.MAX_ROUTE_BYTES', 16), self.assertRaisesRegex(ValueError, '2 MB'):
             parse_route_text('[{"lat": 30, "lng": 120}]')
-        with patch('desktop_routes.MAX_ROUTE_POINTS', 1), self.assertRaisesRegex(ValueError, '1 个'):
+        with patch('iosrealrun.desktop_routes.MAX_ROUTE_POINTS', 1), self.assertRaisesRegex(ValueError, '1 个'):
             parse_route_text('[{"lat": 30, "lng": 120}, {"lat": 31, "lng": 121}]')
 
     def test_bom_encoded_legacy_route_files(self):

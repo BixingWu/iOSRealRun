@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from desktop_routes import MAX_ROUTE_POINTS
-from map_picker import (
+from iosrealrun.desktop_routes import MAX_ROUTE_POINTS
+from iosrealrun.map_picker import (
     MAX_ZOOM,
     MIN_ZOOM,
     TILE_SIZE,

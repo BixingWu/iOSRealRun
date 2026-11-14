@@ -7,7 +7,6 @@ import sys
 import threading
 from pathlib import Path
 
-import yaml
 from PySide6.QtCore import QObject, QEvent, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QDesktopServices, QFont, QIcon, QKeySequence, QLinearGradient,
@@ -19,23 +18,16 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from app_version import VERSION
-from desktop_device import connect_device, list_devices, replay_route, reset_location, reveal_developer_mode
-from desktop_routes import (
+from iosrealrun.app_version import VERSION
+from iosrealrun.config import read_settings
+from iosrealrun.desktop_device import connect_device, list_devices, replay_route, reset_location, reveal_developer_mode
+from iosrealrun.desktop_routes import (
     MAX_ROUTE_BYTES, last_route_path, load_route, parse_route_text, read_last_route, route_length, save_last_route,
 )
-from run import to_wgs84
+from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, bundled_route, resolve_route
+from iosrealrun.run import to_wgs84
 
 
-ROOT = Path(__file__).resolve().parent
-ROUTES = {
-    "紫金港东操场": "ZJGEast.txt",
-    "紫金港西操场": "ZJGWest.txt",
-    "玉泉操场": "YuQuan.txt",
-    "玉泉操场 · YQ": "YQ.txt",
-    "西溪操场": "XiXi.txt",
-    "海宁操场": "HaiNing.txt",
-}
 SYSTEMS = {"WGS 84 · GPS": "wgs84", "GCJ-02 · 高德 / 腾讯": "gcj02", "BD-09 · 百度": "bd09"}
 BLUE = "#0874e8"
 INK = "#181e2a"
@@ -98,28 +90,6 @@ QProgressBar::chunk { background: #0874e8; border-radius: 2px; }
 QDialog { background: #f3f7fc; }
 QPlainTextEdit { padding: 10px; }
 """
-
-
-def read_settings():
-    if not getattr(sys, "frozen", False):
-        config_dir = ROOT
-    elif sys.platform == "darwin":
-        config_dir = Path.home() / "Library" / "Application Support" / "iOSRealRun"
-    else:
-        config_dir = Path(sys.executable).resolve().parent
-    settings, warnings = {}, []
-    for name in ("config.yaml", "config.local.yaml"):
-        path = config_dir / name
-        if not path.is_file():
-            continue
-        try:
-            values = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
-            if not isinstance(values, dict):
-                raise ValueError("配置应包含键值对")
-            settings.update(values)
-        except (OSError, ValueError, yaml.YAMLError):
-            warnings.append(f"{name} 无法读取，已使用其余可用设置。")
-    return settings, config_dir, " ".join(warnings)
 
 
 def label(text, role=None, *, wrap=False):
@@ -637,15 +607,10 @@ class Desktop(QMainWindow):
         if saved:
             self.set_route(*saved, remember=False)
         else:
-            path = Path(str(settings.get("routeConfig", "ZJGEast.txt")))
-            if not path.is_absolute():
-                built_in = path.parent == Path(".") and path.name in ROUTES.values()
-                path = config_dir / path
-                if built_in and not path.is_file():
-                    path = ROOT / path.name
+            path = resolve_route(str(settings.get("routeConfig", "routes/ZJGEast.txt")), config_dir)
             self.open_route(path, closed=True, remember=False)
             if not self.display_points:
-                self.open_route(ROOT / "ZJGEast.txt", default_system="bd09", remember=False)
+                self.open_route(bundled_route("ZJGEast.txt"), default_system="bd09", remember=False)
                 self.show_status("默认路线无法读取，已载入紫金港东操场。", error=True)
         if warning:
             self.show_status(warning, error=True)
@@ -732,7 +697,7 @@ class Desktop(QMainWindow):
     def select_route(self, index):
         name = self.route_box.itemText(index)
         if name in ROUTES:
-            self.open_route(ROOT / ROUTES[name], default_system="bd09")
+            self.open_route(bundled_route(ROUTES[name]), default_system="bd09")
 
     def select_system(self, system):
         index = self.system_box.findData(system)
@@ -756,7 +721,7 @@ class Desktop(QMainWindow):
     def pick_route(self):
         if self.busy or self.closing:
             return
-        from qt_map_picker import open_map_picker
+        from iosrealrun.qt_map_picker import open_map_picker
 
         return open_map_picker(self, self.display_points,
                                lambda points: self.set_route(points, "地图路线", "wgs84", False))
@@ -775,7 +740,7 @@ class Desktop(QMainWindow):
         try:
             name = next((label_text for label_text, filename in ROUTES.items() if filename == path.name), None)
             # PyInstaller's macOS bundle can symlink route files from Frameworks to Resources.
-            built_in = name is not None and path.resolve() == (ROOT / path.name).resolve()
+            built_in = name is not None and path.resolve() == bundled_route(path.name).resolve()
             if closed is None:
                 closed = built_in
             points, system = load_route(path, preserve_endpoint=not closed)
@@ -1112,12 +1077,12 @@ class Desktop(QMainWindow):
 
 def self_test(window):
     from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
-    from qt_map_picker import open_map_picker
+    from iosrealrun.qt_map_picker import open_map_picker
 
     if UserspaceRsdTunnel is None:
         raise RuntimeError("Cannot import the device tunnel.")
     for path in ROUTES.values():
-        if not window.open_route(ROOT / path, default_system="bd09", remember=False) or not window.distance:
+        if not window.open_route(bundled_route(path), default_system="bd09", remember=False) or not window.distance:
             raise RuntimeError(f"Cannot load bundled route {path}.")
         if not window.closed.isChecked():
             raise RuntimeError(f"Bundled route {path} did not load as a closed route.")
