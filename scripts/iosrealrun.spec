@@ -10,7 +10,7 @@ from PyInstaller.utils.hooks import collect_data_files, copy_metadata, get_packa
 scripts = Path(SPECPATH)
 project = scripts.parent
 version = runpy.run_path(str(project / "iosrealrun/app_version.py"))["VERSION"]
-route_files = ("ZJGEast.txt", "ZJGWest.txt", "YuQuan.txt", "HaiNing.txt", "XiXi.txt", "YQ.txt")
+route_files = ("ZJGEast.txt", "ZJGWest.txt", "YuQuan.txt", "HaiNing.txt", "XiXi.txt")
 data = [(str(project / "routes" / filename), "routes") for filename in route_files]
 data += [(str(project / "config.example.yaml"), ".")]
 # Preserve dependency notices. Some device dependencies also query metadata at runtime.
