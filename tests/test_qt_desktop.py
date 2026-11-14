@@ -50,6 +50,40 @@ class DesktopUITests(unittest.TestCase):
         self.assertTrue(window.map_button.isEnabled())
         self.assertTrue(window.import_button.isEnabled())
 
+    def test_bundled_route_stays_closed_when_its_file_resolves_to_resources(self):
+        window = self.make_window()
+        with tempfile.TemporaryDirectory() as directory:
+            contents = Path(directory).resolve() / "iOSRealRun.app" / "Contents"
+            framework_root = contents / "Frameworks"
+            resource_root = contents / "Resources"
+            framework_root.mkdir(parents=True)
+            resource_root.mkdir()
+            preset = framework_root / "ZJGEast.txt"
+            target = resource_root / preset.name
+            route = '[{"lat": 30.1, "lng": 120.1}, {"lat": 30.101, "lng": 120.101}]'
+            preset.write_text(route, encoding="utf-8")
+            target.write_text(route, encoding="utf-8")
+            custom = contents / preset.name
+            custom.write_text(route, encoding="utf-8")
+            resolve = type(preset).resolve
+
+            def resolve_bundle_path(path, *args, **kwargs):
+                return target if path == preset else resolve(path, *args, **kwargs)
+
+            # Emulate the file symlink on Windows runners without symlink privileges.
+            with (
+                patch("qt_desktop.ROOT", framework_root),
+                patch.object(type(preset), "resolve", resolve_bundle_path),
+            ):
+                self.assertTrue(window.open_route(preset, remember=False))
+                self.assertEqual(window.route_box.currentText(), "紫金港东操场")
+                self.assertTrue(window.closed.isChecked())
+                window.laps.setText("0")
+                self.assertEqual(window.duration_text.text(), "持续")
+                self.assertTrue(window.open_route(custom, remember=False))
+                self.assertFalse(window.closed.isChecked())
+                self.assertEqual(window.route_box.currentText(), custom.name)
+
     def test_version_command_does_not_create_a_window(self):
         output = io.StringIO()
         with patch("sys.argv", ["desktop.py", "--version"]), redirect_stdout(output):

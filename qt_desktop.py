@@ -774,7 +774,8 @@ class Desktop(QMainWindow):
     def open_route(self, path, *, default_system=None, closed=None, remember=True):
         try:
             name = next((label_text for label_text, filename in ROUTES.items() if filename == path.name), None)
-            built_in = name is not None and path.resolve().parent == ROOT
+            # PyInstaller's macOS bundle can symlink route files from Frameworks to Resources.
+            built_in = name is not None and path.resolve() == (ROOT / path.name).resolve()
             if closed is None:
                 closed = built_in
             points, system = load_route(path, preserve_endpoint=not closed)
@@ -1116,9 +1117,10 @@ def self_test(window):
     if UserspaceRsdTunnel is None:
         raise RuntimeError("Cannot import the device tunnel.")
     for path in ROUTES.values():
-        window.open_route(ROOT / path, default_system="bd09", remember=False)
-        if not window.distance:
+        if not window.open_route(ROOT / path, default_system="bd09", remember=False) or not window.distance:
             raise RuntimeError(f"Cannot load bundled route {path}.")
+        if not window.closed.isChecked():
+            raise RuntimeError(f"Bundled route {path} did not load as a closed route.")
     window.laps.setText("0")
     if window.duration_text.text() != "持续" or window.start_button.isEnabled():
         raise RuntimeError("No-device controls are not in their expected state.")
