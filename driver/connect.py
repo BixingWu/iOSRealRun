@@ -1,3 +1,4 @@
+import logging
 import re
 
 from pymobiledevice3.lockdown import create_using_usbmux, LockdownClient
@@ -7,6 +8,7 @@ from pymobiledevice3.services.amfi import AmfiService
 from pymobiledevice3.exceptions import NoDeviceConnectedError
 
 
+logger = logging.getLogger(__name__)
 _VERSION_PARTS = re.compile(r"([0-9]{1,4})(?:\.([0-9]{1,4})(?:\.[0-9]{1,4})*)?(?:\s+\([^()]+\))?")
 
 
@@ -24,12 +26,12 @@ async def get_usbmux_lockdownclient():
         try:
             lockdown = await create_using_usbmux(connection_type="USB")
         except NoDeviceConnectedError:
-            print("请连接设备后按回车...")
+            logger.info("请连接设备后按回车。")
             input()
             continue
         if lockdown.all_values.get("PasswordProtected"):
             await lockdown.close()
-            print("请解锁设备后按回车...")
+            logger.info("请解锁设备后按回车。")
             input()
         else:
             return lockdown

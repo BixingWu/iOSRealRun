@@ -11,7 +11,7 @@ class SettingsTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name)
+        self.root = Path(directory.name).resolve()
         (self.root / "config.yaml").write_text(
             "v: 4.4\nrouteConfig: data/default.txt\ncoordinateSystem: bd09\n",
             encoding="utf-8-sig",
@@ -38,15 +38,18 @@ class SettingsTests(unittest.TestCase):
         bundled.mkdir()
         (bundled / "config.yaml").write_text("private_value: ignored\n", encoding="utf-8")
         (self.root / "config.local.yaml").write_text("v: 2.5\nrouteConfig: 路线.txt\n", encoding="utf-8")
-        with (
-            patch.object(desktop, "ROOT", bundled),
-            patch.object(desktop.sys, "frozen", True, create=True),
-            patch.object(desktop.sys, "executable", str(self.root / "iOSRealRun.exe")),
-        ):
-            values, config_dir, warning = desktop.read_settings()
-        self.assertEqual(config_dir, self.root)
-        self.assertEqual(values, {"v": 2.5, "routeConfig": "路线.txt", "coordinateSystem": "bd09"})
-        self.assertFalse(warning)
+        for platform, program in (("win32", "iOSRealRun.exe"), ("linux", "iOSRealRun")):
+            with (
+                self.subTest(platform=platform),
+                patch.object(desktop, "ROOT", bundled),
+                patch.object(desktop.sys, "platform", platform),
+                patch.object(desktop.sys, "frozen", True, create=True),
+                patch.object(desktop.sys, "executable", str(self.root / program)),
+            ):
+                values, config_dir, warning = desktop.read_settings()
+                self.assertEqual(config_dir, self.root)
+                self.assertEqual(values, {"v": 2.5, "routeConfig": "路线.txt", "coordinateSystem": "bd09"})
+                self.assertFalse(warning)
 
 
 if __name__ == "__main__":

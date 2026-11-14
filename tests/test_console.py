@@ -1,12 +1,16 @@
 import asyncio
+import io
 import unittest
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from pymobiledevice3.exceptions import NoDeviceConnectedError
+
 import main
 import run
+from driver import connect
 from init import tunnel
 
 
@@ -26,20 +30,54 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
                         await main.main()
                 initialize.assert_not_awaited()
 
-    async def test_console_targets_same_device_and_enables_restore(self):
+    async def test_console_targets_same_device_and_enables_restore_with_cp1252_stdout(self):
         settings = SimpleNamespace(routeConfig=ROUTE, v=4.4, updateInterval=1)
         replay = AsyncMock()
         mount = AsyncMock()
         with (
+            io.TextIOWrapper(io.BytesIO(), encoding="cp1252") as output,
+            redirect_stdout(output),
+            self.assertLogs("main", level="INFO") as logs,
             patch("main.config.Config", return_value=settings),
             patch("main.init.init", AsyncMock(return_value=("16.7.1", "legacy-device"))),
             patch("main.mount_legacy_image", mount),
             patch("main.run.run_legacy", replay),
         ):
             await main.main()
+            self.assertEqual(output.tell(), 0)
+        self.assertTrue(any("按 Ctrl+C 停止并尝试恢复定位" in line for line in logs.output))
         mount.assert_awaited_once_with("legacy-device")
         self.assertEqual(replay.await_args.kwargs["serial"], "legacy-device")
         self.assertTrue(replay.await_args.kwargs["clear_on_finish"])
+
+    async def test_usb_prompts_use_logging_and_wait_for_input(self):
+        locked = SimpleNamespace(all_values={"PasswordProtected": True}, close=AsyncMock())
+        unlocked = SimpleNamespace(all_values={})
+        find_device = AsyncMock(side_effect=[NoDeviceConnectedError(), locked, unlocked])
+        with (
+            io.TextIOWrapper(io.BytesIO(), encoding="cp1252") as output,
+            redirect_stdout(output),
+            self.assertLogs("driver.connect", level="INFO") as logs,
+            patch("driver.connect.create_using_usbmux", find_device),
+            patch("builtins.input", return_value="") as prompt,
+        ):
+            self.assertIs(await connect.get_usbmux_lockdownclient(), unlocked)
+            self.assertEqual(output.tell(), 0)
+        self.assertEqual(prompt.call_count, 2)
+        self.assertIn("请连接设备后按回车", logs.output[0])
+        self.assertIn("请解锁设备后按回车", logs.output[1])
+        locked.close.assert_awaited_once()
+
+    async def test_lap_completion_uses_logging(self):
+        with (
+            io.TextIOWrapper(io.BytesIO(), encoding="cp1252") as output,
+            redirect_stdout(output),
+            self.assertLogs("run", level="INFO") as logs,
+            patch("run.run1", AsyncMock(return_value=True)),
+        ):
+            await run._run_with_location_simulation(object(), [], 4.4, loop_count=1)
+            self.assertEqual(output.tell(), 0)
+        self.assertIn("已完成第 1 圈", logs.output[0])
 
     async def test_legacy_clear_failure_still_exits_lockdown_context(self):
         lockdown = MagicMock()

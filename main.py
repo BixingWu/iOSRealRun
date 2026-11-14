@@ -83,7 +83,7 @@ async def main(skip_mount=False):
         await mount_legacy_image(serial)
 
     logger.info("路线 %s · 每圈 %.1f 米 · %s · 更新间隔 %.2f 秒", path.name, distance, coordinate_system, interval)
-    print(f"将以约 {speed:g} m/s 循环回放路线。按 Ctrl+C 停止并尝试恢复定位。")
+    logger.info("将以约 %g m/s 循环回放路线。按 Ctrl+C 停止并尝试恢复定位。", speed)
     options = {"update_interval": interval, "coordinate_system": coordinate_system, "clear_on_finish": True}
     if version_number >= (17, 4):
         async with tunnel.tunnel(serial) as (address, port):
@@ -100,7 +100,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main(skip_mount=args.skip_mount))
     except KeyboardInterrupt:
-        print("回放已停止。")
+        logger.info("回放已停止。")
     except (PyMobileDevice3Exception, DTXNsError, DTXProtocolError, YAMLError,
             OSError, EOFError, ValueError, TypeError, AttributeError, ArithmeticError, RuntimeError) as error:
         logger.error("%s", str(error) or type(error).__name__)

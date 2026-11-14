@@ -8,6 +8,7 @@ import math
 import time
 import random
 import asyncio
+import logging
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 
 from geopy.distance import geodesic
@@ -19,6 +20,8 @@ from pymobiledevice3.remote.remote_service_discovery import RemoteServiceDiscove
 from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
 from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
 from pymobiledevice3.services.simulate_location import DtSimulateLocation
+
+logger = logging.getLogger(__name__)
 
 def bd09Towgs84(position):
     wgs_p = {}
@@ -220,7 +223,7 @@ async def _run_with_location_simulation(location_simulation, loc: list, v, d=15,
         )
         if not completed:
             break
-        print("跑完一圈了")
+        logger.info("已完成第 %d 圈。", loop_index)
 
 @asynccontextmanager
 async def dvt_location(rsd):
