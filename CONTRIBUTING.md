@@ -47,6 +47,8 @@ python3.12 -m venv .venv-build
 
 输出在 `dist/<平台>-*/`。构建脚本会检查打包后的程序，再生成压缩包。应用版本在 [iosrealrun/app_version.py](iosrealrun/app_version.py) 中定义，发布说明放在 `docs/releases/`。
 
+为旧版 iOS 制作本地兼容包时，可先将已有开发者镜像及签名放入 `DeveloperDiskImage/<系统版本>/`（例如 `15.6`）。构建脚本会将该目录包含在便携包内；缺少此目录仍可构建，用户可在程序旁补充镜像。该目录已加入 Git 忽略规则，镜像不随源码提交。
+
 GitHub Actions 在三个系统上运行测试和打包；推送对应版本标签时创建 Release，并附带校验清单。[Actions 开发构建](https://github.com/BixingWu/iOSRealRun/actions/workflows/windows-build.yml)的 Artifacts 下载需要登录 GitHub。
 
 更新 Qt 或设备通信依赖后，请检查界面启动与交互，以及设备信任、开发者模式、连接取消、暂停、停止和恢复定位。

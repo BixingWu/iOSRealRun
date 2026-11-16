@@ -913,7 +913,7 @@ class Desktop(QMainWindow):
 
     def update_controls(self):
         device = self.selected_device()
-        ready = device is not None and device.developer_mode is True and not device.issue
+        ready = device is not None and device.ready
         running = self.busy == "replay"
         idle = self.busy is None and not self.closing
         self.refresh_button.setEnabled(idle and not self.scanning)
@@ -948,7 +948,7 @@ class Desktop(QMainWindow):
                 self.update_controls()
             return
         device = self.selected_device()
-        if self.busy or self.closing or not device or device.issue or device.developer_mode is not True:
+        if self.busy or self.closing or not device or not device.ready:
             return
         if not self.display_points or self.validate_parameters():
             return
@@ -964,7 +964,7 @@ class Desktop(QMainWindow):
             interval=float(self.interval), coordinate_system=self.system_box.currentData(),
             stop_requested=self.stop.is_set, pause_requested=self.paused.is_set,
             on_progress=self.events.progress.emit, closed=closed,
-        ), "正在建立设备连接…")
+        ), f"正在准备 iOS {device.version} 定位服务…" if device.uses_legacy_location else "正在建立设备连接…")
 
     def toggle_pause(self):
         if self.busy != "replay" or self.stop.is_set():
@@ -1077,6 +1077,7 @@ class Desktop(QMainWindow):
 
 def self_test(window):
     from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
+    from iosrealrun.desktop_device import Device
     from iosrealrun.qt_map_picker import open_map_picker
 
     if UserspaceRsdTunnel is None:
@@ -1089,6 +1090,10 @@ def self_test(window):
     window.laps.setText("0")
     if window.duration_text.text() != "持续" or window.start_button.isEnabled():
         raise RuntimeError("No-device controls are not in their expected state.")
+    window.receive("scan", True, [Device("self-test", "iPhone", "15.6")])
+    if not window.start_button.isEnabled() or not window.reset_button.isVisible() or window.device_action.isVisible():
+        raise RuntimeError("iOS 15.6 controls unexpectedly require Developer Mode.")
+    window.receive("scan", True, [])
     picker = open_map_picker(window, window.display_points, lambda _: None, load_tiles=False)
     QApplication.processEvents()
     picker.close()

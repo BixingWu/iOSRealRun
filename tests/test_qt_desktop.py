@@ -143,6 +143,28 @@ class DesktopUITests(unittest.TestCase):
         window.update_controls()
         self.assertFalse(window.start_button.isEnabled())
 
+    def test_ios156_can_start_and_reset_without_showing_developer_mode_action(self):
+        window = self.make_window()
+        window.receive("scan", True, [Device("legacy", "iPhone", "15.6")])
+        self.assertTrue(window.start_button.isEnabled())
+        self.assertTrue(window.reset_button.isVisible())
+        self.assertFalse(window.device_action.isVisible())
+        self.assertNotIn("命令行", window.device_detail.text())
+        # Starting from the UI must actually submit a replay, not just enable
+        # the button while leaving the old developer-mode guard in place.
+        with patch.object(window, "submit") as submit:
+            window.start_or_stop()
+            submit.assert_called_once()
+            self.assertEqual(submit.call_args.args[0], "replay")
+            submit.call_args.args[1].close()
+
+    def test_ios16_disabled_developer_mode_keeps_start_disabled(self):
+        window = self.make_window()
+        window.receive("scan", True, [Device("legacy", "iPhone", "16.7", False, "请开启开发者模式")])
+        self.assertFalse(window.start_button.isEnabled())
+        self.assertTrue(window.device_action.isVisible())
+        self.assertEqual(window.device_action.text(), "显示开发者模式开关")
+
     def test_route_restores_coordinate_system_and_closure(self):
         window = self.make_window()
         with tempfile.TemporaryDirectory() as folder:

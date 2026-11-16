@@ -53,7 +53,8 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_device_discovery_distinguishes_version_and_family(self):
         for version, family, expected_issue in (
-            ("17.3.1", "iPhone", "需要 iOS"),
+            ("13.7", "iPhone", "需要 iOS"),
+            ("17.3.1", "iPhone", "17.0–17.3 暂不支持"),
             ("iOS?", "iPhone", "无法读取设备系统版本"),
             ("26.5", "AppleTV", "此设备不支持"),
             ("26.5", "iPad", None),
@@ -74,6 +75,46 @@ class DesktopDeviceTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(result.issue)
                     self.assertTrue(result.developer_mode)
                     mode.assert_awaited_once()
+
+    async def test_ios14_and_ios15_are_ready_without_a_developer_mode_toggle(self):
+        for version in ("14.0", "14.8.1", "15.6", "15.8.5"):
+            with self.subTest(version=version):
+                mode = AsyncMock(side_effect=AssertionError("Old iOS has no Developer Mode"))
+                lockdown = SimpleNamespace(
+                    all_values={"DeviceName": "iPhone", "ProductVersion": version},
+                    paired=True, get_developer_mode_status=mode,
+                )
+                device = await _describe_device(lockdown, "selected")
+                self.assertTrue(device.ready)
+                self.assertTrue(device.uses_legacy_location)
+                self.assertIsNone(device.developer_mode)
+                mode.assert_not_awaited()
+
+    async def test_ios16_still_requires_developer_mode(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                mode = AsyncMock(return_value=enabled)
+                lockdown = SimpleNamespace(
+                    all_values={"DeviceName": "iPhone", "ProductVersion": "16.7.1"},
+                    paired=True, get_developer_mode_status=mode,
+                )
+                device = await _describe_device(lockdown, "selected")
+                self.assertEqual(device.ready, enabled)
+                self.assertTrue(device.uses_legacy_location)
+                mode.assert_awaited_once()
+
+    def test_ready_never_accepts_unsupported_untrusted_or_locked_devices(self):
+        for device in (
+            Device("device", "iPhone", "13.7", True),
+            Device("device", "iPhone", "17.0", True),
+            Device("device", "iPhone", "17.3.1", True),
+            Device("device", "iPhone", "unknown", True),
+            Device("device", "iPhone", "15.6", needs_trust=True),
+            Device("device", "iPhone", "15.6", issue="设备已锁定"),
+            Device("device", "iPhone", "16.7", False),
+        ):
+            with self.subTest(device=device):
+                self.assertFalse(device.ready)
 
     async def test_developer_mode_timeout_preserves_device_identity(self):
         lockdown = SimpleNamespace(

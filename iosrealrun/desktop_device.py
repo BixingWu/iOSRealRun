@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pymobiledevice3 import usbmux
 from pymobiledevice3.dtx.exceptions import DTXNsError, DTXProtocolError
 from pymobiledevice3.exceptions import (
+    AlreadyMountedError,
     ChannelClosedError,
     ConnectionFailedToUsbmuxdError,
     ConnectionTerminatedError,
@@ -29,14 +30,18 @@ from pymobiledevice3.exceptions import (
 )
 from pymobiledevice3.lockdown import create_using_usbmux
 from pymobiledevice3.services.amfi import AmfiService
+from pymobiledevice3.services.mobile_image_mounter import DeveloperDiskImageMounter
+from pymobiledevice3.services.simulate_location import DtSimulateLocation
 
 from iosrealrun.driver.connect import device_version
+from iosrealrun.legacy_image import find_legacy_image, legacy_image_directory
 from iosrealrun.run import dvt_location, geodistance, to_wgs84
 
 
 DEVELOPER_MODE_HELP = "在设备的「设置 → 隐私与安全性 → 开发者模式」中开启，并按提示重启和确认。"
 TRUST_HELP = "请解锁设备，并在设备上点按「信任」。"
-MINIMUM_VERSION_HELP = "桌面版需要 iOS 或 iPadOS 17.4 及以上版本。较旧版本可使用命令行。"
+MINIMUM_VERSION_HELP = "桌面版需要 iOS 或 iPadOS 14 及以上版本。"
+UNSUPPORTED_TUNNEL_HELP = "iOS / iPadOS 17.0–17.3 暂不支持。此版本需要升级至 17.4 或更高版本。"
 _DEVICE_FAILURES = (PyMobileDevice3Exception, OSError, EOFError, asyncio.TimeoutError, DTXNsError, DTXProtocolError)
 _TRUST_FAILURES = (PairingError, FatalPairingError, NotPairedError, NotTrustedError)
 
@@ -53,6 +58,18 @@ class Device:
     developer_mode: bool | None = None
     issue: str | None = None
     needs_trust: bool = False
+
+    @property
+    def uses_legacy_location(self):
+        version = device_version(self.version)
+        return version is not None and (14, 0) <= version < (17, 0)
+
+    @property
+    def ready(self):
+        version = device_version(self.version)
+        if version is None or version < (14, 0) or (17, 0) <= version < (17, 4):
+            return False
+        return not self.issue and not self.needs_trust and (version < (16, 0) or self.developer_mode is True)
 
 
 def _device_error(exc, action):
@@ -94,8 +111,14 @@ async def _describe_device(lockdown, udid):
     version_number = device_version(version)
     if version_number is None:
         return Device(udid, name, version, issue="无法读取设备系统版本。请解锁设备后刷新。")
-    if version_number < (17, 4):
+    if version_number < (14, 0):
         return Device(udid, name, version, issue=MINIMUM_VERSION_HELP)
+    if (17, 0) <= version_number < (17, 4):
+        return Device(udid, name, version, issue=UNSUPPORTED_TUNNEL_HELP)
+    # Developer Mode was introduced in iOS 16. A missing toggle on iOS 14/15
+    # is expected and must not prevent these devices from using the desktop.
+    if version_number < (16, 0):
+        return Device(udid, name, version)
     try:
         developer_mode = await asyncio.wait_for(lockdown.get_developer_mode_status(), 5)
     except (DeveloperModeIsNotEnabledError, MissingValueError):
@@ -150,6 +173,8 @@ async def reveal_developer_mode(udid):
         )
         async with lockdown:
             device = await _describe_device(lockdown, udid)
+            if device.ready:
+                return
             if device.developer_mode is None:
                 raise DeviceError(device.issue)
             if not device.developer_mode:
@@ -171,11 +196,14 @@ class _ReplayStopped(Exception):
 
 
 async def _open_location_service(stack, udid):
-    from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
-
     device = await _read_device(udid)
     if device.issue:
         raise DeviceError(device.issue)
+
+    if device.uses_legacy_location:
+        return await _open_legacy_location_service(stack, device)
+
+    from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
 
     tunnel = UserspaceRsdTunnel(serial=udid, autopair=False, remotepairing_fallback=False)
     stack.push_async_callback(tunnel.aclose)
@@ -183,6 +211,46 @@ async def _open_location_service(stack, udid):
     if not rsd.udid or rsd.udid.replace("-", "").lower() != udid.replace("-", "").lower():
         raise DeviceError("隧道已连接的设备与所选设备不一致。请刷新设备列表后重试。")
     return await stack.enter_async_context(dvt_location(rsd))
+
+
+async def _open_legacy_location_service(stack, device):
+    lockdown = await asyncio.wait_for(
+        create_using_usbmux(serial=device.udid, connection_type="USB", autopair=False), 6
+    )
+    await stack.enter_async_context(lockdown)
+    # Recheck the live connection before mounting; the device can lock or lose
+    # trust between discovery and pressing Start.
+    current = await _describe_device(lockdown, device.udid)
+    if not current.ready or not current.uses_legacy_location:
+        raise DeviceError(current.issue or "设备状态已改变。请刷新设备列表后重试。")
+    await _prepare_legacy_image(lockdown, current.version)
+    # DtSimulateLocation opens and closes a fresh developer service for each
+    # set/clear command. Keep its USB lockdown alive for the entire replay.
+    return DtSimulateLocation(lockdown)
+
+
+async def _prepare_legacy_image(lockdown, version):
+    async with AsyncExitStack() as stack:
+        mounter = DeveloperDiskImageMounter(lockdown)
+        # Register cleanup before connecting so cancellation also closes a
+        # partially opened mounter. The surrounding replay remains stoppable.
+        stack.push_async_callback(mounter.close)
+        if await asyncio.wait_for(mounter.is_image_mounted("Developer"), 8):
+            return
+        image = find_legacy_image(version)
+        if image is None:
+            directory = legacy_image_directory(version)
+            raise DeviceError(
+                f"未找到 iOS {version} 的开发者镜像。请将匹配的 DeveloperDiskImage.dmg "
+                f"和 DeveloperDiskImage.dmg.signature 放入以下文件夹，再点击「开始模拟」：\n{directory}"
+            )
+        try:
+            await asyncio.wait_for(mounter.mount(*image), 90)
+        except AlreadyMountedError:
+            # Another client may have mounted the image after our first check.
+            pass
+        except asyncio.TimeoutError as exc:
+            raise DeviceError("准备开发者镜像超时。请保持设备解锁，重新连接后重试。") from exc
 
 
 async def _wait_or_stop(operation, stop_requested):
