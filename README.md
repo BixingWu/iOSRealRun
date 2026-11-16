@@ -1,20 +1,22 @@
 # iOSRealRun
 
-通过 USB 在 iPhone 或 iPad 上按指定路线模拟定位，兼容 **iOS 26、27**。支持地图绘制、TXT / JSON / GPX 导入、速度与圈数设置，以及暂停、继续和恢复定位。
+通过 USB 在 iPhone 或 iPad 上按指定路线模拟定位，兼容 **iOS 26、27**，并提供 **iOS 14–16** 的桌面连接方式。支持地图绘制、TXT / JSON / GPX 导入、速度与圈数设置，以及暂停、继续和恢复定位。
 
 ![iOSRealRun 桌面界面](docs/images/desktop.png)
 
 ## 下载
 
-**[下载桌面版 v0.2.0-beta.3](https://github.com/BixingWu/iOSRealRun/releases/tag/v0.2.0-beta.3)**
+**[下载桌面版 v0.2.0-beta.4](https://github.com/BixingWu/iOSRealRun/releases/tag/v0.2.0-beta.4)**
 
 | 平台 | 下载 | 启动方式 |
 | --- | --- | --- |
-| Windows x64 | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.3/iOSRealRun-Windows-x64.zip) | 完整解压，打开 `iOSRealRun/iOSRealRun.exe`。 |
-| macOS 15+ · Apple Silicon | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.3/iOSRealRun-macOS-arm64.zip) | 解压后打开 `iOSRealRun.app`。 |
-| Ubuntu 22.04 / 24.04 · x64 | [tar.gz](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.3/iOSRealRun-Linux-x64.tar.gz) | 解压后运行 `iOSRealRun/iOSRealRun`。 |
+| Windows x64 | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-Windows-x64.zip) | 完整解压，打开 `iOSRealRun/iOSRealRun.exe`。 |
+| macOS 15+ · Apple Silicon | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-macOS-arm64.zip) | 解压后打开 `iOSRealRun.app`。 |
+| Ubuntu 22.04 / 24.04 · x64 | [tar.gz](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-Linux-x64.tar.gz) | 解压后运行 `iOSRealRun/iOSRealRun`。 |
 
 压缩包自带运行环境和五条示例路线，无需安装 Python。请保留解压后的完整目录。
+
+本版修复旧版 iOS 被要求使用命令行的问题。iOS 14–16 需准备匹配的开发者镜像，发布包不内置 Apple 镜像；放置方法见 [旧版系统说明](docs/usage.md#ios-14-16-桌面连接)。下载后可按 [SHA-256 校验清单](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/SHA256SUMS.txt)核对文件。
 
 macOS 和 Linux 为实验构建，尚未完成 USB 真机回放验证。macOS 应用未签名和公证；Linux 需要桌面环境及 `usbmuxd` 等系统依赖。见 [macOS 使用说明](docs/usage.md#macos)和 [Linux 安装命令](docs/usage.md#linux)。
 
@@ -41,7 +43,7 @@ macOS 和 Linux 为实验构建，尚未完成 USB 真机回放验证。macOS �
 | iOS 26、27 / iPadOS 26.4 | 桌面版，USB 连接并开启开发者模式。 |
 | iOS / iPadOS 17.4–18.x | 已接入桌面连接流程，尚未完成逐版本真机验证。 |
 | iOS / iPadOS 17.0–17.3 | 当前不支持。 |
-| iOS / iPadOS 14–16 | 桌面版通过 USB 直接连接，自动挂载本地匹配的开发者镜像；16 仍需开发者模式。尚待真机验证。 |
+| iOS / iPadOS 14–16 | 桌面版通过 USB 直接连接，自动挂载本地匹配的开发者镜像；16 仍需开发者模式。Windows + iOS 15.6 已获用户实测可用反馈，其他版本尚待真机验证。 |
 
 电脑环境及旧系统的具体要求见[兼容性说明](docs/usage.md#兼容性)。
 

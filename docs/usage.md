@@ -130,7 +130,7 @@ sudo "$PWD/.venv/bin/python" -m iosrealrun.main
 | --- | --- |
 | iOS / iPadOS 17.4–18.x | 已接入桌面连接流程，尚未完成逐版本真机验证。 |
 | iOS / iPadOS 17.0–17.3 | 不支持当前连接方式。 |
-| iOS / iPadOS 14–16 | 桌面 USB 直连，自动挂载本地匹配的开发者磁盘镜像；16 还需开发者模式。尚未完成真机回归。 |
+| iOS / iPadOS 14–16 | 桌面 USB 直连，自动挂载本地匹配的开发者磁盘镜像；16 还需开发者模式。Windows + iOS 15.6 已获用户实测可用反馈，其他版本尚未完成真机回归。 |
 | 低于 iOS / iPadOS 14 | 不支持。 |
 
 Windows 11 x64 为当前开发和验证环境，Windows 10 x64 使用同一便携包。macOS 15+ / Apple Silicon、Ubuntu 22.04 / 24.04 x64 提供实验构建，已检查构建和界面启动，尚未完成 USB 真机回放验证。Windows ARM、Intel Mac 和其他 Linux 发行版暂无专门安装包。
@@ -142,6 +142,18 @@ Windows 11 x64 为当前开发和验证环境，Windows 10 x64 使用同一便�
 开始模拟或恢复定位时，程序先检查设备是否已挂载开发者镜像。已经挂载则直接复用；否则自动查找本地镜像并挂载。暂停、继续、停止及恢复定位与新版系统使用相同的界面。
 
 本地镜像目录为 `DeveloperDiskImage/<系统版本>/`，每个版本目录中必须同时存在非空的 `DeveloperDiskImage.dmg` 和 `DeveloperDiskImage.dmg.signature`。例如 iOS 15.6 使用 `DeveloperDiskImage/15.6/`。可使用已有旧版工具中的对应镜像文件。
+
+GitHub Release 安装包不内置 Apple 开发者镜像。Windows 上可将旧工具已有的 `15.6` 目录复制到新程序旁的 `DeveloperDiskImage` 目录，得到以下结构，然后重新点击「开始模拟」：
+
+```text
+iOSRealRun/
+  iOSRealRun.exe
+  _internal/
+  DeveloperDiskImage/
+    15.6/
+      DeveloperDiskImage.dmg
+      DeveloperDiskImage.dmg.signature
+```
 
 - Windows / Linux：将 `DeveloperDiskImage` 放在程序旁边。
 - 源码启动：放在项目根目录。
