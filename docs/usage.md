@@ -47,7 +47,9 @@ Release 中的 `SHA256SUMS.txt` 列出了各压缩包的 SHA-256。计算下载�
 
 点击「绘制路线」，在地图上依次点击添加坐标。拖动平移，滚轮或 `+ / −` 缩放；也可以输入纬度、经度定位。至少两个点后点击「使用路线」。相邻点直接连线，不会自动沿道路规划。
 
-地图依赖 OpenStreetMap 在线底图，已经加载的区域会缓存在本机。底图不可用时，仍可使用预置路线或导入文件。
+在主窗口或绘制窗口的底图菜单中可以切换「清爽」「街道」「夜色」及「经典街图」。模拟时，当前位置会沿地图上的路线移动。拖动、缩放可查看周边，点击主窗口的「全览」可回到整条路线。
+
+彩色底图来自 [OpenFreeMap](https://openfreemap.org/)，使用 OpenMapTiles 和 OpenStreetMap 数据。在线地图会按当前视野请求图块。在底图菜单切换到纯轨迹视图后，无需联网也能绘制和回放路线。
 
 预置路线默认闭合。导入、粘贴和绘制的路线默认只从起点走到终点；勾选「闭合路线」后，会补上终点到起点的一段，预览中以虚线表示。闭合路线可设置圈数，`0` 表示持续循环。
 
@@ -79,7 +81,7 @@ GPX 支持单条连续轨迹或路线，不自动拼接多条轨迹或多个轨�
 
 最近使用的路线、坐标系和闭合选项会在下次启动时恢复。Windows 记录在 `%LOCALAPPDATA%\iOSRealRun\last-route.json`，macOS 在 `~/Library/Application Support/iOSRealRun/last-route.json`。删除该文件可回到默认路线。
 
-Windows 地图缓存在 `%LOCALAPPDATA%\iOSRealRun\map-tiles.sqlite3`，macOS 在 `~/Library/Caches/iOSRealRun/`。
+OpenStreetMap 标准底图在 Windows 上缓存在 `%LOCALAPPDATA%\iOSRealRun\map-tiles.sqlite3`，macOS 上缓存在 `~/Library/Caches/iOSRealRun/`。
 
 ## 配置文件
 
@@ -187,7 +189,7 @@ Windows 先确认 Apple Devices / iTunes 能识别设备。检查数据线是否
 
 **地图空白或只显示部分底图**
 
-检查网络能否访问 OpenStreetMap，未加载的区域稍后会自动重试。使用预置路线和导入文件不依赖在线地图。
+可在底图菜单切换到另一地图来源，或检查网络能否访问 OpenFreeMap 和 OpenStreetMap。未加载的区域稍后会自动重试，路线和模拟位置可继续显示。
 
 **停止后定位没有恢复**
 

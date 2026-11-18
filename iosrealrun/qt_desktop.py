@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import math
 import sys
 import threading
 from pathlib import Path
@@ -25,13 +24,12 @@ from iosrealrun.desktop_routes import (
     MAX_ROUTE_BYTES, last_route_path, load_route, parse_route_text, read_last_route, route_length, save_last_route,
 )
 from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, bundled_route, resolve_route
+from iosrealrun.qt_map_picker import MAP_STYLES, MapPreview, open_map_picker
 from iosrealrun.run import to_wgs84
 
 
 SYSTEMS = {"WGS 84 · GPS": "wgs84", "GCJ-02 · 高德 / 腾讯": "gcj02", "BD-09 · 百度": "bd09"}
-BLUE = "#0874e8"
-INK = "#181e2a"
-MUTED = "#53647a"
+TEAL = "#096c62"
 FONT_FAMILIES = {
     "win32": ["Microsoft YaHei UI", "Microsoft YaHei", "SimSun", "Segoe UI"],
     "darwin": ["PingFang SC", "Hiragino Sans GB", "Helvetica Neue"],
@@ -39,55 +37,60 @@ FONT_FAMILIES = {
 }
 
 STYLES = """
-QWidget { color: #181e2a; }
-QLabel[role="brand"] { font-size: 19px; font-weight: 600; }
-QLabel[role="section"] { color: #4a5b71; font-size: 13px; font-weight: 600; }
-QLabel[role="previewTitle"] { font-size: 24px; font-weight: 550; }
-QLabel[role="muted"] { color: #53647a; font-size: 12px; }
-QLabel[role="field"] { color: #354357; font-size: 12px; font-weight: 550; }
-QLabel[role="value"] { color: #181e2a; font-size: 21px; font-weight: 600; }
-QLabel[error="true"] { color: #a22630; }
-QFrame[card="true"] { background: rgba(255, 255, 255, 238); border: 1px solid #e1e8f3; border-radius: 22px; }
-QFrame[rule="true"] { background: #e7edf6; min-height: 1px; max-height: 1px; border: 0; }
-QFrame[divider="true"] { background: #e7edf6; min-width: 1px; max-width: 1px; border: 0; }
+QWidget { color: #193933; }
+QFrame#masthead { background: #163c38; border: 0; border-radius: 13px; }
+QFrame#masthead QLabel { color: #f7fbf8; }
+QLabel[role="brand"] { font-size: 19px; font-weight: 700; }
+QLabel[role="section"] { color: #284f47; font-size: 14px; font-weight: 650; }
+QLabel[role="previewTitle"] { color: #153d35; font-size: 23px; font-weight: 650; }
+QLabel[role="mapState"] { color: #0c7064; font-size: 12px; font-weight: 600; }
+QLabel[role="muted"] { color: #526a64; font-size: 12px; }
+QLabel[role="field"] { color: #39574f; font-size: 12px; font-weight: 550; }
+QLabel[role="value"] { color: #193e36; font-size: 21px; font-weight: 650; }
+QLabel[error="true"] { color: #a13439; }
+QFrame[card="true"] { background: #fffefa; border: 1px solid #cfdcd4; border-radius: 15px; }
+QFrame#metrics { background: #edf4ef; border: 0; border-radius: 10px; }
+QFrame[rule="true"] { background: #d7e2da; min-height: 1px; max-height: 1px; border: 0; }
+QFrame[divider="true"] { background: #c9dbd1; min-width: 1px; max-width: 1px; border: 0; }
 QScrollArea, QWidget#controlBody { background: transparent; border: 0; }
-QPushButton { background: #edf2f9; border: 1px solid transparent; border-radius: 13px;
-              min-height: 29px; padding: 0 11px; font-size: 12px; font-weight: 550; }
-QPushButton:hover { background: #e3ebf7; }
-QPushButton:pressed { background: #d7e4f6; }
-QPushButton:focus { border-color: #85b9f4; }
-QPushButton:disabled { color: #78869b; background: #f0f3f9; }
-QPushButton[role="ghost"] { color: #35618b; background: transparent; }
-QPushButton[role="ghost"]:disabled { color: #78869b; }
-QPushButton[role="ghost"]:hover { background: #e6effa; }
-QPushButton[role="ghost"]:checked { background: #e6effa; }
-QPushButton[role="map"] { background: #eaf3ff; color: #115aaf; min-height: 33px; }
-QPushButton[role="map"]:hover { background: #deedff; }
-QPushButton[role="map"]:disabled { background: #f0f3f9; color: #78869b; }
-QPushButton[role="primary"], QPushButton[role="stop"] { background: #0874e8; color: white;
-              border-radius: 19px; min-height: 43px; padding: 0 21px; font-size: 14px; font-weight: 650; }
-QPushButton[role="primary"]:hover { background: #0569d5; }
-QPushButton[role="stop"] { background: #bb3545; }
-QPushButton[role="stop"]:hover { background: #a92839; }
-QPushButton[role="primary"]:disabled, QPushButton[role="stop"]:disabled { background: #e1e8f3; color: #64768f; }
-QComboBox, QLineEdit, QPlainTextEdit { border: 1px solid #e4ebf5; border-radius: 12px;
-              background: #f5f8fc; min-height: 33px; padding: 0 10px; selection-background-color: #bedcff; }
-QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus { border-color: #87baf4; }
-QComboBox:disabled, QLineEdit:disabled { color: #62728a; background: #f0f3f8; }
-QLineEdit[error="true"] { border-color: #e28a91; }
-QLineEdit#number { font-size: 16px; font-weight: 600; }
-QComboBox::drop-down { border: 0; width: 24px; }
+QPushButton { background: #eff3ed; border: 1px solid #d5dfd7; border-radius: 8px;
+              min-height: 29px; padding: 0 10px; font-size: 12px; font-weight: 550; }
+QPushButton:hover { background: #e3eee7; border-color: #adc7b9; }
+QPushButton:pressed { background: #d6e7dc; }
+QPushButton:focus { border-color: #39887a; }
+QPushButton:disabled { color: #71827b; background: #eff2ed; border-color: #dee6df; }
+QPushButton[role="ghost"] { color: #30675a; background: transparent; border-color: transparent; }
+QPushButton[role="ghost"]:hover, QPushButton[role="ghost"]:checked { background: #e3efe7; }
+QPushButton[role="header"] { color: #f2fbf5; background: #294f48; border-color: #42675e; }
+QPushButton[role="header"]:hover { background: #38665c; }
+QPushButton[role="map"] { background: #dcf1e6; color: #135d48; border-color: #bddfcd; min-height: 33px; }
+QPushButton[role="map"]:hover { background: #cae9da; }
+QPushButton[role="map"]:disabled { background: #eff2ed; color: #71827b; border-color: #dee6df; }
+QPushButton[role="primary"], QPushButton[role="stop"] { background: #096c62; color: white;
+              border: 0; border-radius: 10px; min-height: 40px; padding: 0 20px; font-size: 14px; font-weight: 650; }
+QPushButton[role="primary"]:hover { background: #06574f; }
+QPushButton[role="stop"] { background: #aa4046; }
+QPushButton[role="stop"]:hover { background: #8c3239; }
+QPushButton[role="primary"]:disabled, QPushButton[role="stop"]:disabled { background: #d9e4dc; color: #52695e; }
+QComboBox, QLineEdit, QPlainTextEdit { border: 1px solid #cfdcd2; border-radius: 8px;
+              background: #f9fbf7; min-height: 32px; padding: 0 10px; selection-background-color: #c8e6d5; }
+QComboBox { padding-right: 24px; }
+QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus { border-color: #438d7a; }
+QComboBox:disabled, QLineEdit:disabled { color: #5c7066; background: #eef2eb; }
+QLineEdit[error="true"] { border-color: #ce7d7d; }
+QLineEdit#number { font-size: 17px; font-weight: 600; }
+QComboBox::drop-down { border: 0; width: 22px; }
 QComboBox::down-arrow { image: none; }
-QComboBox QAbstractItemView { background: #fcfdff; border: 1px solid #dce7f3;
-              border-radius: 10px; padding: 5px; selection-background-color: #e1efff; selection-color: #153a65; outline: 0; }
+QComboBox QAbstractItemView { background: #fffefa; border: 1px solid #c9dacd;
+              border-radius: 7px; padding: 4px; selection-background-color: #dbebde; selection-color: #1b483a; outline: 0; }
 QCheckBox { spacing: 8px; }
-QCheckBox::indicator { width: 17px; height: 17px; border-radius: 6px;
-              background: #f1f5fb; border: 1px solid #c5d3e5; }
-QCheckBox::indicator:checked { background: #0874e8; border-color: #0874e8; }
-QCheckBox::indicator:disabled { background: #e1e8f3; border-color: #dae4f1; }
-QProgressBar { background: #eaf0f7; border: 0; border-radius: 2px; min-height: 4px; max-height: 4px; }
-QProgressBar::chunk { background: #0874e8; border-radius: 2px; }
-QDialog { background: #f3f7fc; }
+QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px;
+              background: #f7faf5; border: 1px solid #bccdc2; }
+QCheckBox::indicator:checked { background: #096c62; border-color: #096c62; }
+QCheckBox::indicator:disabled { background: #d8e2d8; border-color: #cdd9cf; }
+QProgressBar { background: #dcebe1; border: 0; border-radius: 2px; min-height: 4px; max-height: 4px; }
+QProgressBar::chunk { background: #138876; border-radius: 2px; }
+QDialog { background: #f4f7f0; }
 QPlainTextEdit { padding: 10px; }
 """
 
@@ -109,7 +112,7 @@ def set_property(widget, name, value):
         widget.update()
 
 
-def icon(kind, color=BLUE, size=20):
+def icon(kind, color=TEAL, size=20):
     pixels = QPixmap(size * 2, size * 2)
     pixels.fill(Qt.GlobalColor.transparent)
     pixels.setDevicePixelRatio(2)
@@ -120,8 +123,8 @@ def icon(kind, color=BLUE, size=20):
     painter.setPen(pen)
     if kind == "brand":
         gradient = QLinearGradient(0, 0, 24, 24)
-        gradient.setColorAt(0, QColor("#58a4ff"))
-        gradient.setColorAt(1, QColor("#0669e2"))
+        gradient.setColorAt(0, QColor("#51bba3"))
+        gradient.setColorAt(1, QColor("#0b7567"))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(gradient)
         painter.drawRoundedRect(QRectF(0, 0, 24, 24), 7, 7)
@@ -182,7 +185,7 @@ def button(text, callback, *, role=None, symbol=None):
     if role:
         widget.setProperty("role", role)
     if symbol:
-        widget.setIcon(icon(symbol, "#35618b"))
+        widget.setIcon(icon(symbol, "#c9eddd" if role == "header" else "#30675a"))
         widget.setIconSize(QSize(16, 16))
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
     widget.clicked.connect(callback)
@@ -199,9 +202,9 @@ class Surface(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         gradient = QLinearGradient(0, 0, self.width(), self.height())
-        gradient.setColorAt(0, QColor("#f7f9fd"))
-        gradient.setColorAt(0.56, QColor("#edf3fc"))
-        gradient.setColorAt(1, QColor("#f3f7fb"))
+        gradient.setColorAt(0, QColor("#f2f5ed"))
+        gradient.setColorAt(0.56, QColor("#eaf1e9"))
+        gradient.setColorAt(1, QColor("#f6f5ec"))
         painter.fillRect(self.rect(), gradient)
 
 
@@ -210,7 +213,7 @@ class ComboBox(QComboBox):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#6a7e99"), 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.setPen(QPen(QColor("#486d60"), 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         x, y = self.width() - 15, self.height() / 2
         painter.drawLine(QPointF(x - 3.1, y - 1.5), QPointF(x, y + 1.8))
         painter.drawLine(QPointF(x, y + 1.8), QPointF(x + 3.1, y - 1.5))
@@ -236,130 +239,18 @@ class CheckBox(QCheckBox):
         painter.drawLine(QPointF(8, y + 3), QPointF(13, y - 3))
 
 
-class RouteCanvas(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setMinimumHeight(185)
-        self.points = []
-        self.marker = None
-        self.closed = False
-        self.projection = None
-        self.route_path = QPainterPath()
-        self.return_path = QPainterPath()
-        self.setAccessibleName("路线预览")
-
-    def set_route(self, points, closed):
-        self.points = points
-        self.closed = closed
-        self.marker = None
-        self.layout_route()
-        self.update()
-
-    def set_marker(self, point):
-        self.marker = point
-        self.update()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.layout_route()
-
-    def layout_route(self):
-        self.projection = None
-        self.route_path = QPainterPath()
-        self.return_path = QPainterPath()
-        if not self.points:
-            return
-        first = self.points[0]
-        longitude_scale = max(0.001, math.cos(math.radians(first["lat"])))
-        projected = []
-        previous = first["lng"]
-        longitude = 0.0
-        for point in self.points:
-            longitude += (point["lng"] - previous + 180) % 360 - 180
-            projected.append((longitude * longitude_scale, first["lat"] - point["lat"]))
-            previous = point["lng"]
-        xs, ys = zip(*projected)
-        xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
-        scale = min(max(1, self.width() - 110) / max(xmax - xmin, 1e-12),
-                    max(1, self.height() - 90) / max(ymax - ymin, 1e-12))
-        center_x, center_y = (xmin + xmax) / 2, (ymin + ymax) / 2
-
-        def pixel(x, y):
-            return QPointF(self.width() / 2 + (x - center_x) * scale,
-                           self.height() / 2 + (y - center_y) * scale)
-
-        def project(point):
-            offset = ((point["lng"] - first["lng"]) * longitude_scale - center_x)
-            longitude = (offset / longitude_scale + 180) % 360 - 180
-            return pixel(center_x + longitude * longitude_scale, first["lat"] - point["lat"])
-
-        self.projection = project
-        self.route_path.moveTo(pixel(*projected[0]))
-        for point in projected[1:]:
-            self.route_path.lineTo(pixel(*point))
-        if self.closed and self.points[-1] != first:
-            self.return_path.moveTo(pixel(*projected[-1]))
-            self.return_path.lineTo(pixel(*projected[0]))
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bounds = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        clip = QPainterPath()
-        clip.addRoundedRect(bounds, 17, 17)
-        painter.setClipPath(clip)
-
-        background = QLinearGradient(0, 0, self.width(), self.height())
-        background.setColorAt(0, QColor("#f8faff"))
-        background.setColorAt(1, QColor("#edf4fd"))
-        painter.fillRect(bounds, background)
-        painter.setPen(QPen(QColor("#e3ebf7"), 1))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(bounds, 17, 17)
-
-        if not self.projection:
-            painter.setPen(QColor(MUTED))
-            painter.drawText(bounds, Qt.AlignmentFlag.AlignCenter, "选择或导入路线")
-            return
-
-        painter.setPen(QPen(QColor("#dcecff"), 13, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPath(self.route_path)
-        painter.setPen(QPen(QColor("#538ee7"), 2.1, Qt.PenStyle.DashLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPath(self.return_path)
-        painter.setPen(QPen(QColor(BLUE), 3.4, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPath(self.route_path)
-        start = self.projection(self.points[0])
-        end = self.projection(self.points[-1])
-        painter.setBrush(QColor("#fcfdff"))
-        if not self.closed:
-            painter.drawEllipse(end, 4.2, 4.2)
-        painter.setBrush(QColor(BLUE))
-        painter.setPen(QPen(QColor("#ffffff"), 2.4))
-        painter.drawEllipse(start, 6.4, 6.4)
-        if self.marker:
-            mark = self.projection(self.marker)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(8, 116, 232, 45))
-            painter.drawEllipse(mark, 13, 13)
-            painter.setBrush(QColor(BLUE))
-            painter.setPen(QPen(QColor("#ffffff"), 2.6))
-            painter.drawEllipse(mark, 7.5, 7.5)
-
-
 class BackgroundEvents(QObject):
     result = Signal(str, bool, object)
     progress = Signal(int, float, object)
 
 
 class Desktop(QMainWindow):
-    def __init__(self, *, discover=True):
+    def __init__(self, *, discover=True, load_tiles=None):
         super().__init__()
         self.setWindowTitle("iOSRealRun")
         self.setWindowIcon(icon("brand", size=32))
         self.setStyleSheet(STYLES)
+        self.load_tiles = discover if load_tiles is None else load_tiles
         self.devices = []
         self.points = []
         self.display_points = []
@@ -399,26 +290,28 @@ class Desktop(QMainWindow):
         surface = Surface()
         self.setCentralWidget(surface)
         page = QVBoxLayout(surface)
-        page.setContentsMargins(27, 19, 27, 20)
-        page.setSpacing(16)
+        page.setContentsMargins(16, 12, 16, 12)
+        page.setSpacing(10)
 
-        header = QHBoxLayout()
-        header.setSpacing(10)
+        masthead = QFrame(objectName="masthead")
+        header = QHBoxLayout(masthead)
+        header.setContentsMargins(14, 7, 12, 7)
+        header.setSpacing(9)
         brand = QLabel()
         brand.setPixmap(icon("brand", size=32).pixmap(QSize(32, 32)))
         header.addWidget(brand)
         header.addWidget(label("iOSRealRun", "brand"))
         header.addStretch()
-        help_button = button("使用帮助", self.open_help, role="ghost", symbol="help")
+        help_button = button("使用帮助", self.open_help, role="header", symbol="help")
         help_button.setToolTip(f"iOSRealRun {VERSION}")
         header.addWidget(help_button)
-        page.addLayout(header)
+        page.addWidget(masthead)
 
         content = QHBoxLayout()
-        content.setSpacing(16)
+        content.setSpacing(12)
         page.addLayout(content, 1)
         self.controls = QScrollArea()
-        self.controls.setFixedWidth(286)
+        self.controls.setFixedWidth(268)
         self.controls.setWidgetResizable(True)
         self.controls.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.controls.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -469,7 +362,7 @@ class Desktop(QMainWindow):
         phone = QLabel()
         phone.setPixmap(icon("phone", size=17).pixmap(QSize(17, 17)))
         heading.addWidget(phone)
-        heading.addWidget(label("设备", "section"))
+        heading.addWidget(label("USB 设备", "section"))
         heading.addStretch()
         self.refresh_button = button("刷新", self.refresh_devices, role="ghost", symbol="refresh")
         heading.addWidget(self.refresh_button)
@@ -493,7 +386,7 @@ class Desktop(QMainWindow):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(15, 14, 15, 13)
         layout.setSpacing(8)
-        layout.addWidget(label("路线", "section"))
+        layout.addWidget(label("路线设置", "section"))
         self.route_box = ComboBox()
         self.route_box.setAccessibleName("路线")
         self.route_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -558,12 +451,37 @@ class Desktop(QMainWindow):
     def build_preview_card(self):
         frame = card()
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(18, 17, 18, 15)
-        layout.setSpacing(12)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+        context = QHBoxLayout()
+        self.map_state = label("路线预览", "mapState")
+        context.addWidget(self.map_state)
+        self.tile_state = label("", "muted")
+        self.tile_state.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.tile_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        context.addWidget(self.tile_state, 1)
+        layout.addLayout(context)
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(7)
         self.preview_name = label("路线预览", "previewTitle")
         self.preview_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        layout.addWidget(self.preview_name)
-        self.canvas = RouteCanvas()
+        toolbar.addWidget(self.preview_name, 1)
+        self.map_style_box = ComboBox()
+        self.map_style_box.setAccessibleName("底图样式")
+        self.map_style_box.setToolTip("切换底图样式")
+        for style_id, name in MAP_STYLES.items():
+            self.map_style_box.addItem(name, style_id)
+        self.map_style_box.setCurrentIndex(self.map_style_box.findData("light"))
+        toolbar.addWidget(self.map_style_box)
+        self.canvas = MapPreview(load_tiles=self.load_tiles, style=self.map_style_box.currentData())
+        self.canvas.changed.connect(self.update_map_status)
+        self.map_style_box.currentIndexChanged.connect(
+            lambda: self.canvas.set_map_style(self.map_style_box.currentData()))
+        fit_button = button("全览", self.canvas.fit_route)
+        fit_button.setToolTip("缩放至完整路线")
+        fit_button.setAccessibleName("显示完整路线")
+        toolbar.addWidget(fit_button)
+        layout.addLayout(toolbar)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout.addWidget(self.canvas, 1)
         self.progress_bar = QProgressBar()
@@ -572,8 +490,9 @@ class Desktop(QMainWindow):
         self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
 
-        metrics = QHBoxLayout()
-        metrics.setContentsMargins(3, 0, 3, 0)
+        metric_frame = QFrame(objectName="metrics")
+        metrics = QHBoxLayout(metric_frame)
+        metrics.setContentsMargins(13, 7, 13, 7)
         metrics.setSpacing(14)
         self.distance_text = label("—", "value")
         self.distance_caption = label("单圈距离", "muted")
@@ -591,8 +510,11 @@ class Desktop(QMainWindow):
             pair.addWidget(caption)
             pair.addWidget(item)
             metrics.addLayout(pair, 1)
-        layout.addLayout(metrics)
+        layout.addWidget(metric_frame)
         return frame
+
+    def update_map_status(self):
+        self.tile_state.setText(self.canvas.status())
 
     def load_settings(self):
         settings, config_dir, warning = read_settings()
@@ -721,10 +643,12 @@ class Desktop(QMainWindow):
     def pick_route(self):
         if self.busy or self.closing:
             return
-        from iosrealrun.qt_map_picker import open_map_picker
-
-        return open_map_picker(self, self.display_points,
-                               lambda points: self.set_route(points, "地图路线", "wgs84", False))
+        dialog = open_map_picker(self, self.display_points,
+                                 lambda points: self.set_route(points, "地图路线", "wgs84", False),
+                                 style=self.map_style_box.currentData(), load_tiles=self.load_tiles)
+        dialog.mapStyleChanged.connect(
+            lambda style: self.map_style_box.setCurrentIndex(self.map_style_box.findData(style)))
+        return dialog
 
     def browse_route(self):
         if self.busy or self.closing:
@@ -928,6 +852,17 @@ class Desktop(QMainWindow):
         self.parameter_hint.setText(error)
         self.parameter_hint.setVisible(bool(error))
         self.reset_button.setVisible(ready and idle)
+        state = "路线预览"
+        if running:
+            if self.stop.is_set():
+                state = "正在停止"
+            elif self.paused.is_set():
+                state = "模拟已暂停"
+            elif self.current_point is None:
+                state = "正在连接"
+            else:
+                state = "实时位置"
+        self.map_state.setText(state)
         self.pause_button.setVisible(running and self.current_point is not None)
         self.pause_button.setEnabled(running and not self.stop.is_set())
         stopping = running and self.stop.is_set()
@@ -977,6 +912,7 @@ class Desktop(QMainWindow):
             self.paused.set()
             self.pause_button.setText("继续")
             self.show_status("已暂停")
+        self.update_controls()
 
     def reset(self):
         device = self.selected_device()
@@ -1065,6 +1001,7 @@ class Desktop(QMainWindow):
     def closeEvent(self, event):
         if self.busy is None:
             self.scan_timer.stop()
+            self.canvas.stop()
             event.accept()
             return
         self.closing = True
@@ -1076,12 +1013,14 @@ class Desktop(QMainWindow):
 
 
 def self_test(window):
+    from mapbox_vector_tile import decode
     from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
     from iosrealrun.desktop_device import Device
-    from iosrealrun.qt_map_picker import open_map_picker
 
     if UserspaceRsdTunnel is None:
         raise RuntimeError("Cannot import the device tunnel.")
+    if decode(b""):
+        raise RuntimeError("Expected an empty vector tile to have no map layers.")
     for path in ROUTES.values():
         if not window.open_route(bundled_route(path), default_system="bd09", remember=False) or not window.distance:
             raise RuntimeError(f"Cannot load bundled route {path}.")

@@ -52,6 +52,20 @@ class DesktopUITests(unittest.TestCase):
         self.assertTrue(window.map_button.isEnabled())
         self.assertTrue(window.import_button.isEnabled())
 
+    def test_editor_and_preview_share_style_without_changing_route(self):
+        window = self.make_window()
+        route = list(window.display_points)
+        style_box = window.map_style_box
+        style_box.setCurrentIndex(style_box.findData("dark"))
+        picker = window.pick_route()
+        self.application.processEvents()
+        editor_box = next(box for box in picker.findChildren(QComboBox) if box.findData("light") >= 0)
+        self.assertEqual(editor_box.currentData(), "dark")
+        editor_box.setCurrentIndex(editor_box.findData("street"))
+        picker.reject()
+        self.assertEqual(style_box.currentData(), "street")
+        self.assertEqual(window.display_points, route)
+
     def test_bundled_route_stays_closed_when_its_file_resolves_to_resources(self):
         window = self.make_window()
         with tempfile.TemporaryDirectory() as directory:
@@ -214,8 +228,10 @@ class DesktopUITests(unittest.TestCase):
         with patch("iosrealrun.qt_desktop.replay_route", replay):
             window.start_or_stop()
             self.wait_for(lambda: started.is_set() and window.pause_button.isVisible())
+            self.assertEqual(window.map_state.text(), "实时位置")
             window.toggle_pause()
             self.assertTrue(window.paused.is_set())
+            self.assertEqual(window.map_state.text(), "模拟已暂停")
             window.close()
             self.assertTrue(window.isVisible())
             self.assertTrue(window.closing)

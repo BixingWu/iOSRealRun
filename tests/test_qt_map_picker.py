@@ -10,8 +10,8 @@ from PySide6.QtGui import QColor, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
-from iosrealrun.map_picker import MAX_ZOOM
-from iosrealrun.qt_map_picker import open_map_picker
+from iosrealrun.map_picker import MAX_ZOOM, _route_pixels
+from iosrealrun.qt_map_picker import MapPreview, open_map_picker
 
 
 class _TileLoader:
@@ -40,9 +40,10 @@ class QtMapPickerTests(unittest.TestCase):
         self.addCleanup(self.parent.close)
         self.results = []
 
-    def make_picker(self, *, load_tiles=False, closed=False):
+    def make_picker(self, *, load_tiles=False, closed=False, style="light"):
         points = [{"lat": 30.26, "lng": 120.12}, {"lat": 30.27, "lng": 120.13}]
-        dialog = open_map_picker(self.parent, points, self.results.append, closed=closed, load_tiles=load_tiles)
+        dialog = open_map_picker(self.parent, points, self.results.append, closed=closed, load_tiles=load_tiles,
+                                 style=style)
         self.app.processEvents()
         return dialog
 
@@ -124,7 +125,7 @@ class QtMapPickerTests(unittest.TestCase):
     def test_offline_tiles_keep_drawing_available_and_closing_stops_loader(self):
         loader = _TileLoader()
         with patch("iosrealrun.qt_map_picker._TileLoader", return_value=loader):
-            picker = self.make_picker(load_tiles=True)
+            picker = self.make_picker(load_tiles=True, style="osm")
         canvas = picker.canvas
         canvas._debounce.stop()
         canvas._request()
@@ -147,7 +148,7 @@ class QtMapPickerTests(unittest.TestCase):
     def test_tile_pixmap_is_decoded_on_gui_thread(self):
         loader = _TileLoader()
         with patch("iosrealrun.qt_map_picker._TileLoader", return_value=loader):
-            picker = self.make_picker(load_tiles=True)
+            picker = self.make_picker(load_tiles=True, style="osm")
         canvas = picker.canvas
         from PySide6.QtCore import QBuffer, QByteArray, QIODevice
 
@@ -163,6 +164,49 @@ class QtMapPickerTests(unittest.TestCase):
         self.assertEqual(canvas._images[key].toImage().pixelColor(0, 0), QColor("#b6d7b7"))
         picker.reject()
         self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def test_changing_style_preserves_draft_and_drops_previous_loader(self):
+        loader = _TileLoader()
+        with patch("iosrealrun.qt_map_picker._TileLoader", return_value=loader):
+            picker = self.make_picker(load_tiles=True, style="osm")
+        picker.canvas.add_point(QPointF(picker.canvas.rect().center()))
+        original = list(picker.canvas.points)
+        viewport = picker.canvas._x, picker.canvas._y, picker.canvas._zoom
+        styles = []
+        picker.mapStyleChanged.connect(styles.append)
+        picker.style_box.setCurrentIndex(picker.style_box.findData("plain"))
+        self.assertTrue(loader.closed)
+        self.assertIsNone(picker.canvas._loader)
+        self.assertFalse(picker.canvas._attribution.isVisible())
+        self.assertEqual(original, picker.canvas.points)
+        self.assertEqual(viewport, (picker.canvas._x, picker.canvas._y, picker.canvas._zoom))
+        self.assertEqual(styles, ["plain"])
+        picker.close()
+
+    def test_replay_is_read_only_and_marker_tracks_geography_after_pan_and_zoom(self):
+        preview = MapPreview(load_tiles=False, style="plain")
+        self.addCleanup(preview.close)
+        preview.resize(660, 350)
+        preview.show()
+        points = [{"lat": 30, "lng": 179.9995}, {"lat": 30.0005, "lng": -179.9995}]
+        preview.set_route(points, False)
+        self.app.processEvents()
+        center = preview.rect().center()
+        QTest.mouseClick(preview, Qt.MouseButton.LeftButton, pos=center)
+        QTest.keyClick(preview, Qt.Key.Key_Space)
+        self.assertEqual(preview.points, points)
+        QTest.keyClick(preview, Qt.Key.Key_Right)
+        preview.zoom(-1)
+        initial_view = preview._x, preview._y, preview._zoom
+        for point in points:
+            preview.set_marker(point)
+            x, y = _route_pixels([point], preview._zoom, preview._x, preview._y, preview.width(), preview.height())[0]
+            snapshot = preview.grab()
+            dpr = snapshot.devicePixelRatio()
+            self.assertEqual(snapshot.toImage().pixelColor(round(x * dpr), round(y * dpr)), QColor("#ef9c28"))
+        self.assertEqual(initial_view, (preview._x, preview._y, preview._zoom))
+        preview.set_marker(None)
+        self.assertIsNone(preview.marker)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ data += copy_metadata("pymobiledevice3", recursive=True)
 data += copy_metadata("geopy", recursive=True)
 data += copy_metadata("PyYAML")
 data += copy_metadata("PySide6-Essentials", recursive=True)
+data += copy_metadata("mapbox-vector-tile", recursive=True)
 data += collect_data_files("pymobiledevice3", subdir="resources")
 
 binaries = []
