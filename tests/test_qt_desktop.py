@@ -66,6 +66,20 @@ class DesktopUITests(unittest.TestCase):
         self.assertEqual(style_box.currentData(), "street")
         self.assertEqual(window.display_points, route)
 
+    def test_closed_laps_survive_switching_to_an_open_route(self):
+        window = self.make_window()
+        self.assertEqual(float(window.speed.text()), 5)
+        self.assertEqual(window.pace_text.text(), "3:20 /km")
+        self.assertEqual(window.laps.text(), "100")
+        window.set_route(window.points, "开放路线", closed=False, remember=False)
+        self.assertEqual(window.laps.text(), "1")
+        window.closed.setChecked(True)
+        self.assertEqual(window.laps.text(), "100")
+        window.laps.setText("7")
+        window.closed.setChecked(False)
+        window.set_route(window.points, "闭合路线", closed=True, remember=False)
+        self.assertEqual(window.laps.text(), "7")
+
     def test_bundled_route_stays_closed_when_its_file_resolves_to_resources(self):
         window = self.make_window()
         with tempfile.TemporaryDirectory() as directory:

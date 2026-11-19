@@ -47,6 +47,7 @@ class ConsoleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("按 Ctrl+C 停止并尝试恢复定位" in line for line in logs.output))
         mount.assert_awaited_once_with("legacy-device")
         self.assertEqual(replay.await_args.kwargs["serial"], "legacy-device")
+        self.assertEqual(replay.await_args.kwargs["loop_count"], 100)
         self.assertTrue(replay.await_args.kwargs["clear_on_finish"])
 
     async def test_usb_prompts_use_logging_and_wait_for_input(self):

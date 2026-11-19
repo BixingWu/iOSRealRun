@@ -51,7 +51,7 @@ Release 中的 `SHA256SUMS.txt` 列出了各压缩包的 SHA-256。计算下载�
 
 彩色底图来自 [OpenFreeMap](https://openfreemap.org/)，使用 OpenMapTiles 和 OpenStreetMap 数据。在线地图会按当前视野请求图块。在底图菜单切换到纯轨迹视图后，无需联网也能绘制和回放路线。
 
-预置路线默认闭合。导入、粘贴和绘制的路线默认只从起点走到终点；勾选「闭合路线」后，会补上终点到起点的一段，预览中以虚线表示。闭合路线可设置圈数，`0` 表示持续循环。
+预置路线默认闭合，速度为 5 米/秒（3:20 /km），默认跑 100 圈。导入、粘贴和绘制的路线默认从起点走到终点一次。勾选「闭合路线」后，预览用虚线连接终点和起点，并恢复闭合时的圈数。圈数填 `0` 表示持续循环。
 
 速度范围为 `0.1–30 m/s`。暂停时设备停在当前模拟位置，停止或正常结束时会尝试恢复定位。连接过程中取消操作，可能需要等待约 15 秒清理服务。
 
@@ -88,13 +88,14 @@ OpenStreetMap 标准底图在 Windows 上缓存在 `%LOCALAPPDATA%\iOSRealRun\ma
 当前源码的默认值在 [config.example.yaml](../config.example.yaml)。可以创建 `config.yaml` 覆盖默认值，或使用优先级更高的 `config.local.yaml` 保存个人设置。两个覆盖文件均由 Git 忽略。
 
 ```yaml
-v: 4.4
+v: 5
+laps: 100
 routeConfig: "routes/XiXi.txt"
 coordinateSystem: "bd09"
 updateInterval: 1.0
 ```
 
-`v` 是速度，单位米/秒；`updateInterval` 是更新间隔，单位秒，范围 `0.1–10`。桌面版已有路线记录时，会优先恢复最近使用的路线。
+`v` 是速度（米/秒），`laps` 是圈数（0–999 的整数），`updateInterval` 是更新间隔（0.1–10 秒）。桌面版已有路线记录时，会优先恢复最近使用的路线。
 
 | 运行方式 | 配置文件位置 |
 | --- | --- |
@@ -106,7 +107,7 @@ updateInterval: 1.0
 
 ## 命令行
 
-命令行支持 Windows / macOS，按配置持续循环。以下命令适用于当前 `main` 源码。
+命令行支持 Windows / macOS，按配置的圈数运行。若要持续循环，在个人配置中设置 `laps: 0`。以下命令适用于当前 `main` 源码。
 
 Windows：
 

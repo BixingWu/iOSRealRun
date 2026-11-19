@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from iosrealrun.app_version import VERSION
-from iosrealrun.config import read_settings
+from iosrealrun.config import DEFAULT_LAPS, DEFAULT_SPEED, read_settings
 from iosrealrun.desktop_device import connect_device, list_devices, replay_route, reset_location, reveal_developer_mode
 from iosrealrun.desktop_routes import (
     MAX_ROUTE_BYTES, last_route_path, load_route, parse_route_text, read_last_route, route_length, save_last_route,
@@ -412,7 +412,7 @@ class Desktop(QMainWindow):
         parameters.setVerticalSpacing(5)
         self.speed = QLineEdit(objectName="number")
         self.speed.setAccessibleName("速度（米/秒）")
-        self.laps = QLineEdit("1", objectName="number")
+        self.laps = QLineEdit(objectName="number")
         self.laps.setAccessibleName("圈数")
         for column, (description, field) in enumerate((("速度 · 米/秒", self.speed), ("圈数", self.laps))):
             parameters.addWidget(label(description, "field"), 0, column)
@@ -519,7 +519,9 @@ class Desktop(QMainWindow):
     def load_settings(self):
         settings, config_dir, warning = read_settings()
         self.interval = str(settings.get("updateInterval", 1.0))
-        self.speed.setText(str(settings.get("v", 4.4)))
+        self.speed.setText(str(settings.get("v", DEFAULT_SPEED)))
+        self.closed_laps = str(settings.get("laps", DEFAULT_LAPS))
+        self.laps.setText(self.closed_laps if self.closed.isChecked() else "1")
         system = str(settings.get("coordinateSystem", "bd09")).strip().lower().replace("-", "")
         if self.system_box.findData(system) < 0:
             warning = f"{warning} 不支持配置中的坐标系，已使用 BD-09。".strip()
@@ -636,9 +638,13 @@ class Desktop(QMainWindow):
         self.remember_route()
 
     def change_closure(self, checked):
-        if not checked:
-            self.laps.setText("1")
+        self.update_lap_mode(checked)
         self.change_coordinate_system()
+
+    def update_lap_mode(self, closed):
+        if not closed:
+            self.closed_laps = self.laps.text()
+        self.laps.setText(self.closed_laps if closed else "1")
 
     def pick_route(self):
         if self.busy or self.closing:
@@ -737,11 +743,11 @@ class Desktop(QMainWindow):
     def set_route(self, points, name, system=None, closed=True, *, remember=True):
         if system:
             self.select_system(system)
-        self.closed.blockSignals(True)
-        self.closed.setChecked(closed)
-        self.closed.blockSignals(False)
-        if not closed:
-            self.laps.setText("1")
+        if self.closed.isChecked() != closed:
+            self.closed.blockSignals(True)
+            self.closed.setChecked(closed)
+            self.closed.blockSignals(False)
+            self.update_lap_mode(closed)
         self.points = points
         self.route_name = name
         self.update_route_choices()
