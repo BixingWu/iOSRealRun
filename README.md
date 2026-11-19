@@ -2,23 +2,23 @@
 
 通过 USB 在 iPhone 或 iPad 上按指定路线模拟定位，兼容 **iOS 26、27**，并提供 **iOS 14–16** 的桌面连接方式。支持地图绘制、TXT / JSON / GPX 导入、速度与圈数设置，以及暂停、继续和恢复定位。
 
-![开发版模拟预览：紫金港东操场路线和橙色位置标记](docs/images/desktop.png)
+![紫金港东操场的路线和橙色模拟位置标记](docs/images/desktop.png)
 
-开发版支持在地图上绘制和回放路线，可切换清爽、街道、夜色、经典街图或纯轨迹。图中为内置路线和演示位置。
+绘制与回放可切换清爽、街道、夜色、经典街图或纯轨迹。上图使用内置路线和演示位置。
 
 ## 下载
 
-**[下载桌面版 v0.2.0-beta.4](https://github.com/BixingWu/iOSRealRun/releases/tag/v0.2.0-beta.4)**
+**[下载桌面版 v0.2.0-beta.5](https://github.com/BixingWu/iOSRealRun/releases/tag/v0.2.0-beta.5)**
 
 | 平台 | 下载 | 启动方式 |
 | --- | --- | --- |
-| Windows x64 | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-Windows-x64.zip) | 完整解压，打开 `iOSRealRun/iOSRealRun.exe`。 |
-| macOS 15+ · Apple Silicon | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-macOS-arm64.zip) | 解压后打开 `iOSRealRun.app`。 |
-| Ubuntu 22.04 / 24.04 · x64 | [tar.gz](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-Linux-x64.tar.gz) | 解压后运行 `iOSRealRun/iOSRealRun`。 |
+| Windows x64 | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.5/iOSRealRun-Windows-x64.zip) | 完整解压，打开 `iOSRealRun/iOSRealRun.exe`。 |
+| macOS 15+ · Apple Silicon | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.5/iOSRealRun-macOS-arm64.zip) | 解压后打开 `iOSRealRun.app`。 |
+| Ubuntu 22.04 / 24.04 · x64 | [tar.gz](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.5/iOSRealRun-Linux-x64.tar.gz) | 解压后运行 `iOSRealRun/iOSRealRun`。 |
 
 压缩包自带运行环境和五条示例路线，无需安装 Python。请保留解压后的完整目录。
 
-本版修复旧版 iOS 被要求使用命令行的问题。iOS 14–16 需准备匹配的开发者镜像，发布包不内置 Apple 镜像；放置方法见 [旧版系统说明](docs/usage.md#ios-14-16-桌面连接)。下载后可按 [SHA-256 校验清单](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/SHA256SUMS.txt)核对文件。
+iOS 14–16 通过 USB 连接时，请准备匹配的 Apple 开发者镜像，放置方法见[旧版系统说明](docs/usage.md#ios-14-16-桌面连接)。下载后可按 [SHA-256 校验清单](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.5/SHA256SUMS.txt)核对文件。
 
 macOS 和 Linux 为实验构建，尚未完成 USB 真机回放验证。macOS 应用未签名和公证；Linux 需要桌面环境及 `usbmuxd` 等系统依赖。见 [macOS 使用说明](docs/usage.md#macos)和 [Linux 安装命令](docs/usage.md#linux)。
 
