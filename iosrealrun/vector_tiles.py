@@ -37,6 +37,8 @@ class Palette:
 
 
 PALETTES = {
+    "city": Palette("#f8f9fc", "#f0f2f6", "#d4ead7", "#b8dfc2", "#a9d5f8",
+                    "#e2e6ed", "#c9d1db", "#ffffff", "#ffe0a3", "#465674"),
     "light": Palette("#f7f6f0", "#eeeee8", "#dce9d8", "#c4ddca", "#c5e0e9",
                      "#e3e0d8", "#cfcec5", "#ffffff", "#fff2cb", "#596665"),
     "street": Palette("#f7f2e7", "#ede9dc", "#c8e2b9", "#a8d5b1", "#9dcfde",
@@ -128,6 +130,7 @@ def _features(layers, layer_name):
 GREENS = {"grass", "wood", "forest", "park", "garden", "meadow", "recreation_ground",
           "village_green", "cemetery", "farmland", "national_park", "nature_reserve"}
 SPORTS = {"pitch", "sports_centre", "stadium", "golf_course", "playground", "track"}
+CAMPUS_PLACES = SPORTS | {"school", "university", "college", "sport"}
 MAJOR_ROADS = {"motorway", "trunk", "primary", "secondary"}
 
 
@@ -180,7 +183,13 @@ def _prepare(data):
                 x, y = points[len(points) // 2]
             else:
                 continue
-            labels.append((layer_name, name, QPointF(x * scale, y * scale)))
+            role = layer_name
+            if layer_name == "poi" and (props.get("class") in CAMPUS_PLACES
+                                        or props.get("subclass") in CAMPUS_PLACES):
+                role = "campus"
+            labels.append((role, name, QPointF(x * scale, y * scale)))
+    labels.sort(key=lambda item: {"place": 0, "campus": 1, "water_name": 2,
+                                  "transportation_name": 3, "poi": 4}[item[0]])
     return areas, roads, labels
 
 
@@ -206,6 +215,8 @@ def _render(scene, style, key, source_zoom):
             painter.fillPath(path, QColor(getattr(palette, role)))
             if role == "building" and z >= 15:
                 painter.strokePath(path, QPen(QColor(palette.outline), 0.65 / factor))
+            elif role == "sports" and style == "city" and z >= 15:
+                painter.strokePath(path, QPen(QColor("#96c6a4"), 1 / factor))
         road_scale = min(5, max(0.48, 2 ** ((z - 14) * .45)))
         visible = [road for road in roads if bounds.intersects(road[3].adjusted(-.01, -.01, .01, .01))]
         for casing in (True, False):
@@ -231,14 +242,16 @@ def _render(scene, style, key, source_zoom):
 def _draw_labels(painter, labels, view, factor, palette, zoom):
     font = QFont()
     font.setFamilies(["Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", "sans-serif"])
-    font.setPixelSize(11)
-    painter.setFont(font)
-    metrics = QFontMetricsF(font)
     occupied = []
     frame = QRectF(2, 2, TILE_SIZE - 4, TILE_SIZE - 4)
     for layer, name, position in labels:
-        if not view.contains(position) or (zoom < 15 and layer == "poi"):
+        if not view.contains(position) or (zoom < 15 and layer in ("poi", "campus")):
             continue
+        featured = layer in ("place", "campus")
+        font.setPixelSize(12 if featured else 11)
+        font.setWeight(QFont.Weight.DemiBold if featured else QFont.Weight.Normal)
+        painter.setFont(font)
+        metrics = QFontMetricsF(font)
         anchor = (position - view.topLeft()) * factor
         width = metrics.horizontalAdvance(name)
         baseline = QPointF(anchor.x() - width / 2, anchor.y() + metrics.ascent() / 2)
@@ -249,7 +262,10 @@ def _draw_labels(painter, labels, view, factor, palette, zoom):
         painter.setPen(QColor(palette.land))
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             painter.drawText(baseline + QPointF(dx, dy), name)
-        painter.setPen(QColor(palette.label))
+        color = palette.label
+        if palette is PALETTES["city"]:
+            color = {"water_name": "#447daa", "campus": "#337c58", "poi": "#687b95"}.get(layer, color)
+        painter.setPen(QColor(color))
         painter.drawText(baseline, name)
         occupied.append(box)
 

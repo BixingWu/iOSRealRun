@@ -12,7 +12,7 @@ from PySide6.QtGui import (
     QPainter, QPainterPath, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
+    QApplication, QComboBox, QDialog, QFileDialog, QFrame,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -24,12 +24,14 @@ from iosrealrun.desktop_routes import (
     MAX_ROUTE_BYTES, last_route_path, load_route, parse_route_text, read_last_route, route_length, save_last_route,
 )
 from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, bundled_route, resolve_route
-from iosrealrun.qt_map_picker import MAP_STYLES, MapPreview, open_map_picker
+from iosrealrun.qt_controls import CheckBox, ComboBox
+from iosrealrun.qt_map_picker import DEFAULT_STYLE, MAP_STYLES, MapPreview, open_map_picker
+from iosrealrun.route_drawing import SHAPES
 from iosrealrun.run import to_wgs84
 
 
 SYSTEMS = {"WGS 84 · GPS": "wgs84", "GCJ-02 · 高德 / 腾讯": "gcj02", "BD-09 · 百度": "bd09"}
-TEAL = "#096c62"
+BLUE = "#0874e8"
 FONT_FAMILIES = {
     "win32": ["Microsoft YaHei UI", "Microsoft YaHei", "SimSun", "Segoe UI"],
     "darwin": ["PingFang SC", "Hiragino Sans GB", "Helvetica Neue"],
@@ -37,60 +39,60 @@ FONT_FAMILIES = {
 }
 
 STYLES = """
-QWidget { color: #193933; }
-QFrame#masthead { background: #163c38; border: 0; border-radius: 13px; }
-QFrame#masthead QLabel { color: #f7fbf8; }
-QLabel[role="brand"] { font-size: 19px; font-weight: 700; }
-QLabel[role="section"] { color: #284f47; font-size: 14px; font-weight: 650; }
-QLabel[role="previewTitle"] { color: #153d35; font-size: 23px; font-weight: 650; }
-QLabel[role="mapState"] { color: #0c7064; font-size: 12px; font-weight: 600; }
-QLabel[role="muted"] { color: #526a64; font-size: 12px; }
-QLabel[role="field"] { color: #39574f; font-size: 12px; font-weight: 550; }
-QLabel[role="value"] { color: #193e36; font-size: 21px; font-weight: 650; }
-QLabel[error="true"] { color: #a13439; }
-QFrame[card="true"] { background: #fffefa; border: 1px solid #cfdcd4; border-radius: 15px; }
-QFrame#metrics { background: #edf4ef; border: 0; border-radius: 10px; }
-QFrame[rule="true"] { background: #d7e2da; min-height: 1px; max-height: 1px; border: 0; }
-QFrame[divider="true"] { background: #c9dbd1; min-width: 1px; max-width: 1px; border: 0; }
+QWidget { color: #181e2a; }
+QFrame#masthead { background: transparent; border: 0; }
+QLabel[role="mapState"] { color: #2663a7; font-size: 12px; font-weight: 600; }
+QFrame#metrics { background: #f3f7fd; border: 0; border-radius: 10px; }
+QPushButton[role="header"] { color: #2663a7; background: #eaf3ff; border-color: #d4e4f6; }
+QPushButton[role="header"]:hover { background: #dcecff; }
+QLabel[role="brand"] { font-size: 19px; font-weight: 600; }
+QLabel[role="section"] { color: #4a5b71; font-size: 13px; font-weight: 600; }
+QLabel[role="previewTitle"] { font-size: 24px; font-weight: 550; }
+QLabel[role="muted"] { color: #53647a; font-size: 12px; }
+QLabel[role="field"] { color: #354357; font-size: 12px; font-weight: 550; }
+QLabel[role="value"] { color: #181e2a; font-size: 21px; font-weight: 600; }
+QLabel[error="true"] { color: #a22630; }
+QFrame[card="true"] { background: rgba(255, 255, 255, 238); border: 1px solid #e1e8f3; border-radius: 22px; }
+QFrame[rule="true"] { background: #e7edf6; min-height: 1px; max-height: 1px; border: 0; }
+QFrame[divider="true"] { background: #e7edf6; min-width: 1px; max-width: 1px; border: 0; }
 QScrollArea, QWidget#controlBody { background: transparent; border: 0; }
-QPushButton { background: #eff3ed; border: 1px solid #d5dfd7; border-radius: 8px;
-              min-height: 29px; padding: 0 10px; font-size: 12px; font-weight: 550; }
-QPushButton:hover { background: #e3eee7; border-color: #adc7b9; }
-QPushButton:pressed { background: #d6e7dc; }
-QPushButton:focus { border-color: #39887a; }
-QPushButton:disabled { color: #71827b; background: #eff2ed; border-color: #dee6df; }
-QPushButton[role="ghost"] { color: #30675a; background: transparent; border-color: transparent; }
-QPushButton[role="ghost"]:hover, QPushButton[role="ghost"]:checked { background: #e3efe7; }
-QPushButton[role="header"] { color: #f2fbf5; background: #294f48; border-color: #42675e; }
-QPushButton[role="header"]:hover { background: #38665c; }
-QPushButton[role="map"] { background: #dcf1e6; color: #135d48; border-color: #bddfcd; min-height: 33px; }
-QPushButton[role="map"]:hover { background: #cae9da; }
-QPushButton[role="map"]:disabled { background: #eff2ed; color: #71827b; border-color: #dee6df; }
-QPushButton[role="primary"], QPushButton[role="stop"] { background: #096c62; color: white;
-              border: 0; border-radius: 10px; min-height: 40px; padding: 0 20px; font-size: 14px; font-weight: 650; }
-QPushButton[role="primary"]:hover { background: #06574f; }
-QPushButton[role="stop"] { background: #aa4046; }
-QPushButton[role="stop"]:hover { background: #8c3239; }
-QPushButton[role="primary"]:disabled, QPushButton[role="stop"]:disabled { background: #d9e4dc; color: #52695e; }
-QComboBox, QLineEdit, QPlainTextEdit { border: 1px solid #cfdcd2; border-radius: 8px;
-              background: #f9fbf7; min-height: 32px; padding: 0 10px; selection-background-color: #c8e6d5; }
-QComboBox { padding-right: 24px; }
-QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus { border-color: #438d7a; }
-QComboBox:disabled, QLineEdit:disabled { color: #5c7066; background: #eef2eb; }
-QLineEdit[error="true"] { border-color: #ce7d7d; }
-QLineEdit#number { font-size: 17px; font-weight: 600; }
-QComboBox::drop-down { border: 0; width: 22px; }
+QPushButton { background: #edf2f9; border: 1px solid transparent; border-radius: 13px;
+              min-height: 29px; padding: 0 11px; font-size: 12px; font-weight: 550; }
+QPushButton:hover { background: #e3ebf7; }
+QPushButton:pressed { background: #d7e4f6; }
+QPushButton:focus { border-color: #85b9f4; }
+QPushButton:disabled { color: #78869b; background: #f0f3f9; }
+QPushButton[role="ghost"] { color: #35618b; background: transparent; }
+QPushButton[role="ghost"]:disabled { color: #78869b; }
+QPushButton[role="ghost"]:hover { background: #e6effa; }
+QPushButton[role="ghost"]:checked { background: #e6effa; }
+QPushButton[role="map"] { background: #eaf3ff; color: #115aaf; min-height: 33px; }
+QPushButton[role="map"]:hover { background: #deedff; }
+QPushButton[role="map"]:disabled { background: #f0f3f9; color: #78869b; }
+QPushButton[role="primary"], QPushButton[role="stop"] { background: #0874e8; color: white;
+              border-radius: 19px; min-height: 43px; padding: 0 21px; font-size: 14px; font-weight: 650; }
+QPushButton[role="primary"]:hover { background: #0569d5; }
+QPushButton[role="stop"] { background: #bb3545; }
+QPushButton[role="stop"]:hover { background: #a92839; }
+QPushButton[role="primary"]:disabled, QPushButton[role="stop"]:disabled { background: #e1e8f3; color: #64768f; }
+QComboBox, QLineEdit, QPlainTextEdit { border: 1px solid #e4ebf5; border-radius: 12px;
+              background: #f5f8fc; min-height: 33px; padding: 0 10px; selection-background-color: #bedcff; }
+QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus { border-color: #87baf4; }
+QComboBox:disabled, QLineEdit:disabled { color: #62728a; background: #f0f3f8; }
+QLineEdit[error="true"] { border-color: #e28a91; }
+QLineEdit#number { font-size: 16px; font-weight: 600; }
+QComboBox::drop-down { border: 0; width: 24px; }
 QComboBox::down-arrow { image: none; }
-QComboBox QAbstractItemView { background: #fffefa; border: 1px solid #c9dacd;
-              border-radius: 7px; padding: 4px; selection-background-color: #dbebde; selection-color: #1b483a; outline: 0; }
+QComboBox QAbstractItemView { background: #fcfdff; border: 1px solid #dce7f3;
+              border-radius: 10px; padding: 5px; selection-background-color: #e1efff; selection-color: #153a65; outline: 0; }
 QCheckBox { spacing: 8px; }
-QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px;
-              background: #f7faf5; border: 1px solid #bccdc2; }
-QCheckBox::indicator:checked { background: #096c62; border-color: #096c62; }
-QCheckBox::indicator:disabled { background: #d8e2d8; border-color: #cdd9cf; }
-QProgressBar { background: #dcebe1; border: 0; border-radius: 2px; min-height: 4px; max-height: 4px; }
-QProgressBar::chunk { background: #138876; border-radius: 2px; }
-QDialog { background: #f4f7f0; }
+QCheckBox::indicator { width: 17px; height: 17px; border-radius: 6px;
+              background: #f1f5fb; border: 1px solid #c5d3e5; }
+QCheckBox::indicator:checked { background: #0874e8; border-color: #0874e8; }
+QCheckBox::indicator:disabled { background: #e1e8f3; border-color: #dae4f1; }
+QProgressBar { background: #eaf0f7; border: 0; border-radius: 2px; min-height: 4px; max-height: 4px; }
+QProgressBar::chunk { background: #0874e8; border-radius: 2px; }
+QDialog { background: #f3f7fc; }
 QPlainTextEdit { padding: 10px; }
 """
 
@@ -112,7 +114,7 @@ def set_property(widget, name, value):
         widget.update()
 
 
-def icon(kind, color=TEAL, size=20):
+def icon(kind, color=BLUE, size=20):
     pixels = QPixmap(size * 2, size * 2)
     pixels.fill(Qt.GlobalColor.transparent)
     pixels.setDevicePixelRatio(2)
@@ -123,8 +125,8 @@ def icon(kind, color=TEAL, size=20):
     painter.setPen(pen)
     if kind == "brand":
         gradient = QLinearGradient(0, 0, 24, 24)
-        gradient.setColorAt(0, QColor("#51bba3"))
-        gradient.setColorAt(1, QColor("#0b7567"))
+        gradient.setColorAt(0, QColor("#5ca5ff"))
+        gradient.setColorAt(1, QColor("#0874e8"))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(gradient)
         painter.drawRoundedRect(QRectF(0, 0, 24, 24), 7, 7)
@@ -185,7 +187,7 @@ def button(text, callback, *, role=None, symbol=None):
     if role:
         widget.setProperty("role", role)
     if symbol:
-        widget.setIcon(icon(symbol, "#c9eddd" if role == "header" else "#30675a"))
+        widget.setIcon(icon(symbol, "#2162a6" if role == "header" else "#356a9e"))
         widget.setIconSize(QSize(16, 16))
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
     widget.clicked.connect(callback)
@@ -202,41 +204,10 @@ class Surface(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         gradient = QLinearGradient(0, 0, self.width(), self.height())
-        gradient.setColorAt(0, QColor("#f2f5ed"))
-        gradient.setColorAt(0.56, QColor("#eaf1e9"))
-        gradient.setColorAt(1, QColor("#f6f5ec"))
+        gradient.setColorAt(0, QColor("#f7faff"))
+        gradient.setColorAt(0.56, QColor("#edf3fb"))
+        gradient.setColorAt(1, QColor("#f2f6fb"))
         painter.fillRect(self.rect(), gradient)
-
-
-class ComboBox(QComboBox):
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#486d60"), 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        x, y = self.width() - 15, self.height() / 2
-        painter.drawLine(QPointF(x - 3.1, y - 1.5), QPointF(x, y + 1.8))
-        painter.drawLine(QPointF(x, y + 1.8), QPointF(x + 3.1, y - 1.5))
-
-    def wheelEvent(self, event):
-        if self.hasFocus() and self.view().isVisible():
-            super().wheelEvent(event)
-        else:
-            event.ignore()
-
-
-class CheckBox(QCheckBox):
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if not self.isChecked():
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = "#ffffff" if self.isEnabled() else "#778aa4"
-        painter.setPen(QPen(QColor(color), 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        y = self.height() / 2
-        painter.drawLine(QPointF(5, y), QPointF(8, y + 3))
-        painter.drawLine(QPointF(8, y + 3), QPointF(13, y - 3))
 
 
 class BackgroundEvents(QObject):
@@ -471,7 +442,7 @@ class Desktop(QMainWindow):
         self.map_style_box.setToolTip("切换底图样式")
         for style_id, name in MAP_STYLES.items():
             self.map_style_box.addItem(name, style_id)
-        self.map_style_box.setCurrentIndex(self.map_style_box.findData("light"))
+        self.map_style_box.setCurrentIndex(self.map_style_box.findData(DEFAULT_STYLE))
         toolbar.addWidget(self.map_style_box)
         self.canvas = MapPreview(load_tiles=self.load_tiles, style=self.map_style_box.currentData())
         self.canvas.changed.connect(self.update_map_status)
@@ -649,8 +620,15 @@ class Desktop(QMainWindow):
     def pick_route(self):
         if self.busy or self.closing:
             return
-        dialog = open_map_picker(self, self.display_points,
-                                 lambda points: self.set_route(points, "地图路线", "wgs84", False),
+        reference = self.display_points
+        if self.closed.isChecked() and reference and reference[-1] != reference[0]:
+            reference = reference + reference[:1]
+
+        def apply(points):
+            name = SHAPES.get(dialog.canvas.shape, "地图路线")
+            self.set_route(points, name, "wgs84", dialog.canvas.route_closed)
+
+        dialog = open_map_picker(self, reference, apply,
                                  style=self.map_style_box.currentData(), load_tiles=self.load_tiles)
         dialog.mapStyleChanged.connect(
             lambda style: self.map_style_box.setCurrentIndex(self.map_style_box.findData(style)))

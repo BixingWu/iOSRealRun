@@ -89,6 +89,37 @@ class QtMapPickerTests(unittest.TestCase):
         self.assertFalse(picker.isVisible())
         self.assertEqual(self.results, [])
 
+    def test_smoothing_and_templates_preserve_the_hand_drawn_anchors(self):
+        picker = self.make_picker()
+        canvas = picker.canvas
+        center = canvas.rect().center()
+        for delta in (QPoint(-80, -30), QPoint(80, -30), QPoint(80, 60)):
+            QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=center + delta)
+        anchors = canvas.points.copy()
+        draft = canvas.draft_route.copy()
+        self.assertGreater(len(draft), len(anchors))
+        picker.smooth_box.click()
+        self.assertEqual(canvas.draft_route, anchors)
+        picker.smooth_box.click()
+        self.assertEqual(canvas.draft_route, draft)
+
+        picker.shape_box.setCurrentIndex(picker.shape_box.findData("ikun"))
+        self.assertFalse(picker.apply_button.isEnabled())
+        for delta in (QPoint(-70, -30), QPoint(80, 40)):
+            QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=center + delta)
+        self.assertTrue(picker.apply_button.isEnabled())
+        lettering = canvas.draft_route.copy()
+        self.assertFalse(canvas.route_closed)
+        picker.shape_box.setCurrentIndex(picker.shape_box.findData("heart"))
+        self.assertTrue(canvas.route_closed)
+        self.assertNotEqual(canvas.draft_route, lettering)
+        picker.shape_box.setCurrentIndex(0)
+        self.assertEqual(canvas.draft_route, draft)
+        picker.shape_box.setCurrentIndex(picker.shape_box.findData("ikun"))
+        self.assertEqual(canvas.draft_route, lettering)
+        picker.apply_button.click()
+        self.assertEqual(self.results, [lettering])
+
     def test_location_input_validates_coordinates_and_keeps_draft(self):
         picker = self.make_picker()
         canvas = picker.canvas

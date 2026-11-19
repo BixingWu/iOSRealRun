@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QPlainTextEdit, QPushButton
 
 from iosrealrun.app_version import VERSION
@@ -65,6 +66,23 @@ class DesktopUITests(unittest.TestCase):
         picker.reject()
         self.assertEqual(style_box.currentData(), "street")
         self.assertEqual(window.display_points, route)
+
+    def test_drawing_templates_apply_to_the_desktop_with_their_closure(self):
+        window = self.make_window()
+        self.assertEqual(window.map_style_box.currentData(), "city")
+        for kind, title, closed in (("ikun", "连笔 IKUN", False), ("heart", "爱心", True)):
+            picker = window.pick_route()
+            self.application.processEvents()
+            picker.shape_box.setCurrentIndex(picker.shape_box.findData(kind))
+            center = QPointF(picker.canvas.rect().center())
+            picker.canvas.add_point(center - QPointF(90, 42))
+            picker.canvas.add_point(center + QPointF(90, 42))
+            preview = picker.canvas.draft_route.copy()
+            picker.apply_button.click()
+            self.assertEqual(window.display_points, preview)
+            self.assertEqual(window.route_name, title)
+            self.assertEqual(window.closed.isChecked(), closed)
+            self.assertEqual(window.laps.text(), "100" if closed else "1")
 
     def test_closed_laps_survive_switching_to_an_open_route(self):
         window = self.make_window()

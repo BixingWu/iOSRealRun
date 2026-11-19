@@ -17,7 +17,6 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -30,6 +29,8 @@ from PySide6.QtWidgets import (
 )
 
 from iosrealrun.desktop_routes import MAX_ROUTE_POINTS
+from iosrealrun.qt_controls import CheckBox, ComboBox
+from iosrealrun.route_drawing import SHAPES, shape_route, smooth_route
 from iosrealrun.map_picker import (
     MAX_ZOOM,
     MIN_ZOOM,
@@ -44,17 +45,19 @@ from iosrealrun.map_picker import (
 )
 
 
-BLUE = "#087f78"
-BORDER = "#d6e2e0"
-MAP_BACKGROUND = "#eff5f2"
+BLUE = "#0874e8"
+BORDER = "#dce5f2"
+MAP_BACKGROUND = "#f3f7fc"
 MAX_IMAGE_TILES = 72
-MAP_STYLES = {"light": "清爽", "street": "街道", "dark": "夜色", "osm": "经典街图", "plain": "纯轨迹"}
+DEFAULT_STYLE = "city"
+MAP_STYLES = {"city": "城市街图", "light": "清爽", "street": "街道", "dark": "夜色",
+              "osm": "经典街图", "plain": "纯轨迹"}
 OSM_CREDIT = '<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>'
 VECTOR_CREDIT = ('<a href="https://openfreemap.org/">OpenFreeMap</a> · '
                  '<a href="https://openmaptiles.org/">© OpenMapTiles</a> · ' + OSM_CREDIT)
 
 PICKER_STYLE = """
-QDialog#routePicker { background: #f2f6f4; color: #1b3636; }
+QDialog#routePicker { background: #f3f7fc; color: #192c47; }
 QLabel#mapHint { color: #526276; }
 QLabel#mapSummary { color: #526276; }
 QLabel#coordinateError { color: #a42931; }
@@ -70,9 +73,9 @@ QPushButton:pressed { background: #e0eeff; }
 QPushButton:focus { border-color: #0075e8; }
 QPushButton:disabled { color: #8994a5; background: #f1f4f8; border-color: #e3eaf2; }
 QPushButton#mapApply {
-    color: #ffffff; background: #007b72; border-color: #007b72; font-weight: 600;
+    color: #ffffff; background: #0874e8; border-color: #0874e8; font-weight: 600;
 }
-QPushButton#mapApply:hover { background: #046057; }
+QPushButton#mapApply:hover { background: #0564cb; }
 QPushButton#mapApply:disabled { color: #78879b; background: #dce7f4; border-color: #dce7f4; }
 QPushButton#zoomButton {
     padding: 0 8px; min-width: 25px; min-height: 26px; border-radius: 8px;
@@ -83,13 +86,20 @@ QLineEdit {
     padding: 7px 10px; min-height: 18px; selection-background-color: #afd4ff;
 }
 QLineEdit:focus { border-color: #0075e8; }
+QComboBox { background: #f5f8fc; border: 1px solid #dce5f0; border-radius: 9px;
+            min-height: 32px; padding: 0 25px 0 10px; }
+QComboBox::drop-down { border: 0; width: 22px; }
+QComboBox::down-arrow { image: none; }
+QCheckBox { spacing: 7px; }
+QCheckBox::indicator { width: 17px; height: 17px; border: 1px solid #c5d3e5; border-radius: 5px; }
+QCheckBox::indicator:checked { background: #0874e8; border-color: #0874e8; }
 """
 
 
 class _MapCanvas(QWidget):
     changed = Signal()
 
-    def __init__(self, parent, initial_points, closed, load_tiles, *, editable=True, style="light"):
+    def __init__(self, parent, initial_points, closed, load_tiles, *, editable=True, style=DEFAULT_STYLE):
         super().__init__(parent)
         self.setMinimumHeight(190 if editable else 105)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -101,10 +111,17 @@ class _MapCanvas(QWidget):
         self.setAccessibleDescription("点击添加点，拖动平移，滚轮缩放。也可用方向键和空格。"
                                       if editable else "拖动平移，滚轮缩放。地图显示路线和当前模拟位置。")
         self.points = []
+        self.shape = None
+        self.corners = []
+        self.smoothing = True
+        self.draft_route = []
         self.marker = None
         self._geometry = None
         self._closed_route = closed
         self._seed = list(initial_points)
+        self.reference = self._seed.copy() if editable else []
+        self.show_reference = bool(self.reference)
+        self._guide_geometry = None
         self._fit_pending = True
         self._zoom, self._x, self._y = _fit(self._seed, 860, 530)
         self._press = None
@@ -145,7 +162,7 @@ class _MapCanvas(QWidget):
         self._attribution.setOpenExternalLinks(True)
         self._attribution.setTextFormat(Qt.TextFormat.RichText)
         self._attribution.setStyleSheet("background: rgba(255,255,255,235); border-radius: 4px;"
-                                        "padding: 2px 5px; color: #35504b; font-size: 10px;")
+                                        "padding: 2px 5px; color: #355577; font-size: 10px;")
         self.set_map_style(style)
 
     def set_map_style(self, style):
@@ -166,7 +183,7 @@ class _MapCanvas(QWidget):
             self._poll_timer.start()
             self.destroyed.connect(self._loader.close)
         text = OSM_CREDIT if style == "osm" else VECTOR_CREDIT
-        self._attribution.setText(text.replace('<a href=', '<a style="color:#254d48" href='))
+        self._attribution.setText(text.replace('<a href=', '<a style="color:#315776" href='))
         self._attribution.setVisible(style != "plain")
         self._place_controls()
         self._viewport_changed()
@@ -205,6 +222,7 @@ class _MapCanvas(QWidget):
 
     def _viewport_changed(self):
         self._geometry = None
+        self._guide_geometry = None
         self._visible = _visible_tiles(self._zoom, self._x, self._y, self.width(), self.height())
         if self._loader:
             self._loader.request(())
@@ -215,9 +233,35 @@ class _MapCanvas(QWidget):
             self._debounce.start()
 
     def _draft_changed(self):
+        if self.shape:
+            self.draft_route = shape_route(self.shape, self.corners)
+        elif self.smoothing:
+            self.draft_route = smooth_route(self.points, closed=self._closed_route)
+        else:
+            self.draft_route = self.points.copy()
         self._geometry = None
         self.update()
         self.changed.emit()
+
+    @property
+    def controls(self):
+        return self.corners if self.shape else self.points
+
+    @property
+    def route_closed(self):
+        return self.shape != "ikun" if self.shape else self._closed_route
+
+    def select_shape(self, shape):
+        self.shape = shape
+        self._draft_changed()
+
+    def set_smoothing(self, enabled):
+        self.smoothing = enabled
+        self._draft_changed()
+
+    def set_reference_visible(self, enabled):
+        self.show_reference = enabled
+        self.update()
 
     def _retry(self):
         if not self._debounce.isActive():
@@ -287,6 +331,8 @@ class _MapCanvas(QWidget):
         painter.setClipPath(outline)
         painter.fillRect(self.rect(), QColor("#243235" if self.map_style == "dark" else MAP_BACKGROUND))
         self._paint_tiles(painter)
+        if self._editable:
+            self._paint_guides(painter)
         self._paint_route(painter)
         painter.setClipping(False)
         painter.setPen(QColor(BORDER))
@@ -294,7 +340,7 @@ class _MapCanvas(QWidget):
         painter.drawPath(outline)
 
     def _paint_tiles(self, painter):
-        painter.setPen(QColor("#34454a" if self.map_style == "dark" else "#e0e9e4"))
+        painter.setPen(QColor("#34454a" if self.map_style == "dark" else "#e3ebf5"))
         for key, x, y in self._visible:
             pixmap = self._images.get(key)
             if pixmap is None:
@@ -302,24 +348,49 @@ class _MapCanvas(QWidget):
             else:
                 painter.drawPixmap(x, y, pixmap)
 
+    def _screen_path(self, points):
+        return QPolygonF([QPointF(x, y) for x, y in
+                          _route_pixels(points, self._zoom, self._x, self._y, self.width(), self.height())])
+
+    def _paint_guides(self, painter):
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if self.show_reference and self.reference:
+            if self._guide_geometry is None:
+                self._guide_geometry = self._screen_path(self.reference)
+            pen = QPen(QColor("#6681a0"), 2, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawPolyline(self._guide_geometry)
+        if self.shape and self.corners:
+            corners = self._screen_path(self.corners)
+            painter.setPen(QPen(QColor("#4d77ab"), 1.2, Qt.PenStyle.DashLine))
+            if len(corners) == 2:
+                painter.drawRect(QRectF(corners.first(), corners.last()).normalized())
+            painter.setBrush(QColor("#ffffff"))
+            for corner in corners:
+                painter.drawRect(QRectF(corner.x() - 3, corner.y() - 3, 6, 6))
+
     def _paint_route(self, painter):
-        if not self.points:
+        points = self.draft_route if self._editable else self.points
+        if not points:
             return
         size = TILE_SIZE * 2 ** self._zoom
         if self._geometry is None:
-            closing = self._closed_route and len(self.points) > 1 and self.points[0] != self.points[-1]
-            route = self.points + self.points[:1] if closing else self.points
-            pixels = _route_pixels(route, self._zoom, self._x, self._y, self.width(), self.height())
-            positions = [QPointF(x, y) for x, y in pixels]
-            path = QPolygonF(positions[:-1] if closing else positions)
+            closing = self.route_closed and len(points) > 1 and points[0] != points[-1]
+            route = points + points[:1] if closing else points
+            positions = self._screen_path(route)
+            path = QPolygonF(positions)
+            if closing:
+                path.removeLast()
             last = positions[-1] if closing else None
-            self._geometry = (path, last, min(x for x, _ in pixels), max(x for x, _ in pixels))
-        path, closing_point, left, right = self._geometry
+            anchors = self._screen_path(self.points) if self._editable and not self.shape else None
+            bounds = positions.boundingRect()
+            self._geometry = (path, last, anchors, bounds.left(), bounds.right())
+        path, closing_point, anchors, left, right = self._geometry
         copies = range(math.ceil((-right - 8) / size), math.floor((self.width() - left + 8) / size) + 1)
         for copy in copies:
             painter.save()
             painter.translate(copy * size, 0)
-            self._paint_route_copy(painter, path, closing_point)
+            self._paint_route_copy(painter, path, closing_point, anchors)
             painter.restore()
         if self.marker is not None:
             x, y = _route_pixels([self.marker], self._zoom, self._x, self._y, self.width(), self.height())[0]
@@ -334,7 +405,7 @@ class _MapCanvas(QWidget):
                 painter.setPen(QPen(QColor("#ffffff"), 2))
                 painter.drawEllipse(mark, 7, 7)
 
-    def _paint_route_copy(self, painter, path, closing_point):
+    def _paint_route_copy(self, painter, path, closing_point, anchors):
         if len(path) >= 2:
             for color, weight in (("#ffffff", 7), (BLUE, 3.5)):
                 pen = QPen(QColor(color), weight)
@@ -347,13 +418,12 @@ class _MapCanvas(QWidget):
             painter.drawLine(path.last(), closing_point)
             painter.setPen(QPen(QColor(BLUE), 2, Qt.PenStyle.DashLine))
             painter.drawLine(path.last(), closing_point)
-        if self._editable:
-            indices = range(len(path))
+        if anchors is not None:
+            markers = anchors
         else:
-            indices = (0,) if self._closed_route else (0, len(path) - 1)
-        for index in indices:
-            point = path[index]
-            radius = 5.5 if index in (0, len(path) - 1) else 3.4
+            markers = [path.first()] if self.route_closed else [path.first(), path.last()]
+        for index, point in enumerate(markers):
+            radius = 5.5 if index in (0, len(markers) - 1) else 3.4
             painter.setPen(QPen(QColor(BLUE if index == 0 else "#ffffff"), 1.5))
             painter.setBrush(QColor("#ffffff" if index == 0 else BLUE))
             painter.drawEllipse(point, radius, radius)
@@ -432,32 +502,39 @@ class _MapCanvas(QWidget):
         self._set_center(*_project(point, self._zoom))
 
     def add_point(self, point):
-        if not self._editable or not QRectF(self.rect()).contains(point) or len(self.points) >= MAX_ROUTE_POINTS:
+        if not self._editable or not QRectF(self.rect()).contains(point):
             return
         x = self._x + point.x() - self.width() / 2
         y = self._y + point.y() - self.height() / 2
         if not 0 <= y <= TILE_SIZE * 2 ** self._zoom:
             return
         position = {key: round(value, 7) for key, value in _unproject(x, y, self._zoom).items()}
-        if not self.points or self.points[-1] != position:
-            self.points.append(position)
-            self._draft_changed()
+        controls = self.controls
+        if controls and controls[-1] == position:
+            return
+        if self.shape and len(controls) == 2:
+            controls[-1] = position
+        elif len(controls) < MAX_ROUTE_POINTS:
+            controls.append(position)
+        else:
+            return
+        self._draft_changed()
 
     def undo(self):
-        if self.points:
-            self.points.pop()
+        if self.controls:
+            self.controls.pop()
             self._draft_changed()
 
     def clear(self):
-        if self.points:
-            self.points.clear()
+        if self.controls:
+            self.controls.clear()
             self._draft_changed()
 
 
 class MapPreview(_MapCanvas):
     """Read-only map. Replays move the marker without changing the viewport."""
 
-    def __init__(self, parent=None, *, load_tiles=True, style="light"):
+    def __init__(self, parent=None, *, load_tiles=True, style=DEFAULT_STYLE):
         super().__init__(parent, (), False, load_tiles, editable=False, style=style)
 
     def set_route(self, points, closed):
@@ -480,7 +557,7 @@ class MapPreview(_MapCanvas):
 class MapPicker(QDialog):
     mapStyleChanged = Signal(str)
 
-    def __init__(self, parent, initial_points, on_apply, closed=False, *, load_tiles=True, style="light"):
+    def __init__(self, parent, initial_points, on_apply, closed=False, *, load_tiles=True, style=DEFAULT_STYLE):
         super().__init__(parent)
         self.setObjectName("routePicker")
         self.setWindowTitle("绘制路线")
@@ -494,11 +571,11 @@ class MapPicker(QDialog):
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(10)
         toolbar = QHBoxLayout()
-        hint = QLabel("点击选点，拖动平移 · 滚轮缩放", self)
-        hint.setObjectName("mapHint")
-        hint.setWordWrap(True)
-        toolbar.addWidget(hint, 1)
-        self.style_box = QComboBox(self)
+        self.hint = QLabel(self)
+        self.hint.setObjectName("mapHint")
+        self.hint.setWordWrap(True)
+        toolbar.addWidget(self.hint, 1)
+        self.style_box = ComboBox(self)
         self.style_box.setAccessibleName("地图样式")
         self.style_box.setToolTip("地图样式")
         for style_id, name in MAP_STYLES.items():
@@ -532,6 +609,27 @@ class MapPicker(QDialog):
         layout.addWidget(self.coordinate_panel)
 
         self.canvas = _MapCanvas(self, initial_points, closed, load_tiles, style=style)
+        tools = QHBoxLayout()
+        self.shape_box = ComboBox(self)
+        self.shape_box.setAccessibleName("绘制方式")
+        self.shape_box.addItem("手绘选点", "")
+        for kind, name in SHAPES.items():
+            self.shape_box.addItem(name, kind)
+        self.shape_box.currentIndexChanged.connect(lambda: self.canvas.select_shape(self.shape_box.currentData()))
+        tools.addWidget(self.shape_box)
+        self.smooth_box = CheckBox("平滑补点", self)
+        self.smooth_box.setToolTip("从第三个手绘点开始圆滑转弯，沿曲线约每 3 米补一个点")
+        self.smooth_box.setChecked(True)
+        self.smooth_box.toggled.connect(self.canvas.set_smoothing)
+        tools.addWidget(self.smooth_box)
+        self.reference_box = CheckBox("显示参考路线", self)
+        self.reference_box.setToolTip("用灰蓝色虚线显示打开绘图前的路线")
+        self.reference_box.setChecked(self.canvas.show_reference)
+        self.reference_box.setEnabled(bool(self.canvas.reference))
+        self.reference_box.toggled.connect(self.canvas.set_reference_visible)
+        tools.addWidget(self.reference_box)
+        tools.addStretch()
+        layout.addLayout(tools)
         self.style_box.currentIndexChanged.connect(self._select_style)
         layout.addWidget(self.canvas, 1)
 
@@ -591,20 +689,32 @@ class MapPicker(QDialog):
         self.canvas.setFocus()
 
     def _refresh(self):
-        count = len(self.canvas.points)
+        count = len(self.canvas.controls)
+        output_count = len(self.canvas.draft_route)
         self.undo_button.setEnabled(count > 0)
         self.clear_button.setEnabled(count > 0)
-        self.apply_button.setEnabled(count >= 2)
-        parts = ["至少选择两个点"] if count < 2 else [f"已选 {count} 个点"]
+        self.apply_button.setEnabled(output_count >= 2)
+        shape = self.canvas.shape
+        self.smooth_box.setVisible(not shape)
+        if shape:
+            self.hint.setText("在操场内点选区域的两个对角，可再次点选调整第二个角")
+            parts = ["选第一个角" if not count else "选对角"] if count < 2 else [
+                f"{SHAPES[shape]} · {output_count} 个路线点" if output_count else "请拉开两个角的距离"]
+        else:
+            self.hint.setText("点击选点，拖动平移，滚轮缩放")
+            if self.canvas.smoothing and count >= 3:
+                parts = [f"{count} 个手绘点 → {output_count} 个路线点"]
+            else:
+                parts = ["至少选择两个点"] if count < 2 else [f"已选 {count} 个点"]
         state = self.canvas.status()
         if state:
             parts.append(state)
         self.summary.setText(" · ".join(parts))
 
     def _apply(self):
-        if self._stopped or len(self.canvas.points) < 2:
+        if self._stopped or len(self.canvas.draft_route) < 2:
             return
-        points = self.canvas.points.copy()
+        points = self.canvas.draft_route.copy()
         self.accept()
         self._on_apply(points)
 
@@ -615,7 +725,7 @@ class MapPicker(QDialog):
         super().done(result)
 
 
-def open_map_picker(parent, initial_points, on_apply, *, closed=False, load_tiles=True, style="light"):
+def open_map_picker(parent, initial_points, on_apply, *, closed=False, load_tiles=True, style=DEFAULT_STYLE):
     """Open an empty draft fitted to the current route and return the dialog."""
     dialog = MapPicker(parent, initial_points, on_apply, closed, load_tiles=load_tiles, style=style)
     dialog.open()
