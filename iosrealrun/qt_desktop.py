@@ -27,6 +27,7 @@ from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, bundled_route, resolve_ro
 from iosrealrun.qt_controls import CheckBox, ComboBox
 from iosrealrun.qt_map_picker import DEFAULT_STYLE, MAP_STYLES, MapPreview, open_map_picker
 from iosrealrun.route_drawing import SHAPES
+from iosrealrun.venue_reference import VenueComparison
 from iosrealrun.run import to_wgs84
 
 
@@ -445,16 +446,22 @@ class Desktop(QMainWindow):
         self.map_style_box.setCurrentIndex(self.map_style_box.findData(DEFAULT_STYLE))
         toolbar.addWidget(self.map_style_box)
         self.canvas = MapPreview(load_tiles=self.load_tiles, style=self.map_style_box.currentData())
+        self.comparison = VenueComparison(self.canvas)
+        context.addWidget(self.comparison.button)
         self.canvas.changed.connect(self.update_map_status)
         self.map_style_box.currentIndexChanged.connect(
             lambda: self.canvas.set_map_style(self.map_style_box.currentData()))
+        self.preview_button = button("本地预演", self.toggle_local_preview)
+        self.preview_button.setToolTip("在电脑地图上预演一遍，查看速度和位置标记的轻微波动")
+        toolbar.addWidget(self.preview_button)
+        self.canvas.previewChanged.connect(self.update_local_preview)
         fit_button = button("全览", self.canvas.fit_route)
         fit_button.setToolTip("缩放至完整路线")
         fit_button.setAccessibleName("显示完整路线")
         toolbar.addWidget(fit_button)
         layout.addLayout(toolbar)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        layout.addWidget(self.canvas, 1)
+        layout.addWidget(self.comparison, 1)
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setRange(0, 1000)
@@ -486,6 +493,20 @@ class Desktop(QMainWindow):
 
     def update_map_status(self):
         self.tile_state.setText(self.canvas.status())
+
+    def toggle_local_preview(self):
+        if self.canvas.previewing:
+            self.canvas.stop_preview()
+        elif not self.busy and not self.closing and not self.validate_parameters():
+            self.canvas.start_preview(float(self.speed.text()), self.distance)
+
+    def update_local_preview(self):
+        playing = self.canvas.previewing
+        self.preview_button.setText("结束预演" if playing else "本地预演")
+        if playing:
+            self.map_state.setText(f"本地预演 · {self.canvas.preview_speed:.2f} 米/秒")
+        elif not self.busy:
+            self.map_state.setText("路线预览")
 
     def load_settings(self):
         settings, config_dir, warning = read_settings()
@@ -627,9 +648,12 @@ class Desktop(QMainWindow):
         def apply(points):
             name = SHAPES.get(dialog.canvas.shape, "地图路线")
             self.set_route(points, name, "wgs84", dialog.canvas.route_closed)
+            self.comparison.copy_view(dialog.comparison)
 
         dialog = open_map_picker(self, reference, apply,
-                                 style=self.map_style_box.currentData(), load_tiles=self.load_tiles)
+                                 style=self.map_style_box.currentData(), load_tiles=self.load_tiles,
+                                 venues=self.comparison.entries.values())
+        dialog.comparison.copy_view(self.comparison)
         dialog.mapStyleChanged.connect(
             lambda style: self.map_style_box.setCurrentIndex(self.map_style_box.findData(style)))
         return dialog
@@ -728,6 +752,7 @@ class Desktop(QMainWindow):
             self.update_lap_mode(closed)
         self.points = points
         self.route_name = name
+        self.comparison.select_route(name)
         self.update_route_choices()
         self.show_status("")
         self.update_route()
@@ -783,6 +808,7 @@ class Desktop(QMainWindow):
         return error or ("" if interval_valid else "配置中的更新间隔需为 0.1–10 秒。")
 
     def parameters_changed(self):
+        self.canvas.stop_preview()
         self.update_estimates()
         self.update_controls()
 
@@ -846,7 +872,9 @@ class Desktop(QMainWindow):
                 state = "正在连接"
             else:
                 state = "实时位置"
-        self.map_state.setText(state)
+        self.preview_button.setEnabled(idle and bool(self.display_points) and not error)
+        if not self.canvas.previewing:
+            self.map_state.setText(state)
         self.pause_button.setVisible(running and self.current_point is not None)
         self.pause_button.setEnabled(running and not self.stop.is_set())
         stopping = running and self.stop.is_set()
@@ -906,6 +934,7 @@ class Desktop(QMainWindow):
     def submit(self, action, operation, status=None):
         if action != "scan":
             self.busy = action
+            self.canvas.stop_preview()
         if status:
             self.show_status(status)
         self.update_controls()
@@ -985,6 +1014,7 @@ class Desktop(QMainWindow):
     def closeEvent(self, event):
         if self.busy is None:
             self.scan_timer.stop()
+            self.canvas.stop_preview()
             self.canvas.stop()
             event.accept()
             return
@@ -1013,6 +1043,10 @@ def self_test(window):
     window.laps.setText("0")
     if window.duration_text.text() != "持续" or window.start_button.isEnabled():
         raise RuntimeError("No-device controls are not in their expected state.")
+    window.preview_button.click()
+    if not window.canvas.previewing or window.canvas.marker is not None:
+        raise RuntimeError("The local map preview did not start independently of the device.")
+    window.preview_button.click()
     window.receive("scan", True, [Device("self-test", "iPhone", "15.6")])
     if not window.start_button.isEnabled() or not window.reset_button.isVisible() or window.device_action.isVisible():
         raise RuntimeError("iOS 15.6 controls unexpectedly require Developer Mode.")

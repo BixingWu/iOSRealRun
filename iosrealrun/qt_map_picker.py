@@ -2,6 +2,7 @@
 
 import math
 import queue
+import random
 import time
 from collections import OrderedDict
 
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 from iosrealrun.desktop_routes import MAX_ROUTE_POINTS
 from iosrealrun.qt_controls import CheckBox, ComboBox
 from iosrealrun.route_drawing import SHAPES, shape_route, smooth_route
+from iosrealrun.venue_reference import VenueComparison
 from iosrealrun.map_picker import (
     MAX_ZOOM,
     MIN_ZOOM,
@@ -112,6 +114,7 @@ class _MapCanvas(QWidget):
                                       if editable else "拖动平移，滚轮缩放。地图显示路线和当前模拟位置。")
         self.points = []
         self.shape = None
+        self.lettering_direction = "auto"
         self.corners = []
         self.smoothing = True
         self.draft_route = []
@@ -234,7 +237,7 @@ class _MapCanvas(QWidget):
 
     def _draft_changed(self):
         if self.shape:
-            self.draft_route = shape_route(self.shape, self.corners)
+            self.draft_route = shape_route(self.shape, self.corners, lettering_direction=self.lettering_direction)
         elif self.smoothing:
             self.draft_route = smooth_route(self.points, closed=self._closed_route)
         else:
@@ -257,6 +260,10 @@ class _MapCanvas(QWidget):
 
     def set_smoothing(self, enabled):
         self.smoothing = enabled
+        self._draft_changed()
+
+    def set_lettering_direction(self, direction):
+        self.lettering_direction = direction
         self._draft_changed()
 
     def set_reference_visible(self, enabled):
@@ -392,8 +399,9 @@ class _MapCanvas(QWidget):
             painter.translate(copy * size, 0)
             self._paint_route_copy(painter, path, closing_point, anchors)
             painter.restore()
-        if self.marker is not None:
-            x, y = _route_pixels([self.marker], self._zoom, self._x, self._y, self.width(), self.height())[0]
+        position = self._marker_position(path, closing_point)
+        if position is not None:
+            x, y = position.x(), position.y()
             for copy in range(math.ceil((-x - 13) / size), math.floor((self.width() - x + 13) / size) + 1):
                 mark = QPointF(x + copy * size, y)
                 painter.setPen(Qt.PenStyle.NoPen)
@@ -404,6 +412,11 @@ class _MapCanvas(QWidget):
                 painter.drawEllipse(mark, 7, 7)
                 painter.setPen(QPen(QColor("#ffffff"), 2))
                 painter.drawEllipse(mark, 7, 7)
+
+    def _marker_position(self, path, closing_point):
+        if self.marker is not None:
+            return self._screen_path([self.marker]).first()
+        return None
 
     def _paint_route_copy(self, painter, path, closing_point, anchors):
         if len(path) >= 2:
@@ -534,10 +547,21 @@ class _MapCanvas(QWidget):
 class MapPreview(_MapCanvas):
     """Read-only map. Replays move the marker without changing the viewport."""
 
+    previewChanged = Signal()
+
     def __init__(self, parent=None, *, load_tiles=True, style=DEFAULT_STYLE):
         super().__init__(parent, (), False, load_tiles, editable=False, style=style)
+        self._preview_timer = QTimer(self, interval=150)
+        self._preview_timer.timeout.connect(self._advance_preview)
+        self._preview_path = None
+        self._preview_geometry = None
+        self._preview_fraction = 0.0
+        self._pixel_offset = QPointF()
+        self._random = random.Random()
+        self.preview_speed = 0.0
 
     def set_route(self, points, closed):
+        self.stop_preview()
         self.points = list(points)
         self._closed_route = closed
         self.marker = None
@@ -553,11 +577,66 @@ class MapPreview(_MapCanvas):
         self.marker = point
         self.update()
 
+    @property
+    def previewing(self):
+        return self._preview_timer.isActive()
+
+    def start_preview(self, speed, length):
+        if (len(self.points) < 2 or not math.isfinite(speed) or speed <= 0
+                or not math.isfinite(length) or length <= 0):
+            return
+        self._target_speed = self.preview_speed = speed
+        self._preview_length = length
+        self._preview_fraction = 0.0
+        self._pixel_offset = QPointF()
+        self._last_tick = time.monotonic()
+        self._preview_timer.start()
+        self.previewChanged.emit()
+        self.update()
+
+    def stop_preview(self):
+        if self.previewing:
+            self._preview_timer.stop()
+            self._preview_path = self._preview_geometry = None
+            self.previewChanged.emit()
+            self.update()
+
+    def _advance_preview(self):
+        now = time.monotonic()
+        elapsed = max(0.0, now - self._last_tick)
+        self._last_tick = now
+        retain = math.exp(-elapsed / 1.2)
+        weight = math.sqrt(1 - retain * retain)
+        previous_speed = self.preview_speed
+        deviation = retain * (previous_speed / self._target_speed - 1) + weight * self._random.gauss(0, .014)
+        self.preview_speed = self._target_speed * (1 + max(-.03, min(.03, deviation)))
+        self._preview_fraction += elapsed * (previous_speed + self.preview_speed) / (2 * self._preview_length)
+        if self._preview_fraction >= 1:
+            self.stop_preview()
+            return
+        shift = QPointF(self._random.gauss(0, 1.35), self._random.gauss(0, 1.35))
+        offset = self._pixel_offset * retain + shift * weight
+        self._pixel_offset = offset / max(1.0, math.hypot(offset.x(), offset.y()) / 3)
+        self.previewChanged.emit()
+        self.update()
+
+    def _marker_position(self, path, closing_point):
+        if not self.previewing:
+            return super()._marker_position(path, closing_point)
+        if self._preview_geometry is not self._geometry:
+            line = QPainterPath()
+            line.addPolygon(path)
+            if closing_point is not None:
+                line.lineTo(closing_point)
+            self._preview_path, self._preview_geometry = line, self._geometry
+        return self._preview_path.pointAtPercent(self._preview_fraction) + self._pixel_offset
+
 
 class MapPicker(QDialog):
     mapStyleChanged = Signal(str)
 
-    def __init__(self, parent, initial_points, on_apply, closed=False, *, load_tiles=True, style=DEFAULT_STYLE):
+    def __init__(self, parent, initial_points, on_apply, closed=False, *, load_tiles=True, style=DEFAULT_STYLE,
+                 venues=None):
         super().__init__(parent)
         self.setObjectName("routePicker")
         self.setWindowTitle("绘制路线")
@@ -609,6 +688,8 @@ class MapPicker(QDialog):
         layout.addWidget(self.coordinate_panel)
 
         self.canvas = _MapCanvas(self, initial_points, closed, load_tiles, style=style)
+        self.comparison = VenueComparison(self.canvas, venues)
+        toolbar.insertWidget(1, self.comparison.button)
         tools = QHBoxLayout()
         self.shape_box = ComboBox(self)
         self.shape_box.setAccessibleName("绘制方式")
@@ -617,6 +698,14 @@ class MapPicker(QDialog):
             self.shape_box.addItem(name, kind)
         self.shape_box.currentIndexChanged.connect(lambda: self.canvas.select_shape(self.shape_box.currentData()))
         tools.addWidget(self.shape_box)
+        self.direction_box = ComboBox(self)
+        self.direction_box.setAccessibleName("字样方向")
+        self.direction_box.setToolTip("字样会在选框内尽量放大，自动方向沿选框的长边排列")
+        for name, direction in (("自动朝向", "auto"), ("横排", "horizontal"), ("竖排", "vertical")):
+            self.direction_box.addItem(name, direction)
+        self.direction_box.currentIndexChanged.connect(
+            lambda: self.canvas.set_lettering_direction(self.direction_box.currentData()))
+        tools.addWidget(self.direction_box)
         self.smooth_box = CheckBox("平滑补点", self)
         self.smooth_box.setToolTip("从第三个手绘点开始圆滑转弯，沿曲线约每 3 米补一个点")
         self.smooth_box.setChecked(True)
@@ -631,7 +720,7 @@ class MapPicker(QDialog):
         tools.addStretch()
         layout.addLayout(tools)
         self.style_box.currentIndexChanged.connect(self._select_style)
-        layout.addWidget(self.canvas, 1)
+        layout.addWidget(self.comparison, 1)
 
         footer = QHBoxLayout()
         self.summary = QLabel(self)
@@ -695,6 +784,7 @@ class MapPicker(QDialog):
         self.clear_button.setEnabled(count > 0)
         self.apply_button.setEnabled(output_count >= 2)
         shape = self.canvas.shape
+        self.direction_box.setVisible(shape == "ikun")
         self.smooth_box.setVisible(not shape)
         if shape:
             self.hint.setText("在操场内点选区域的两个对角，可再次点选调整第二个角")
@@ -725,8 +815,9 @@ class MapPicker(QDialog):
         super().done(result)
 
 
-def open_map_picker(parent, initial_points, on_apply, *, closed=False, load_tiles=True, style=DEFAULT_STYLE):
+def open_map_picker(parent, initial_points, on_apply, *, closed=False, load_tiles=True, style=DEFAULT_STYLE,
+                    venues=None):
     """Open an empty draft fitted to the current route and return the dialog."""
-    dialog = MapPicker(parent, initial_points, on_apply, closed, load_tiles=load_tiles, style=style)
+    dialog = MapPicker(parent, initial_points, on_apply, closed, load_tiles=load_tiles, style=style, venues=venues)
     dialog.open()
     return dialog

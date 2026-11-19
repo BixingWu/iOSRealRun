@@ -67,6 +67,43 @@ class DesktopUITests(unittest.TestCase):
         self.assertEqual(style_box.currentData(), "street")
         self.assertEqual(window.display_points, route)
 
+    def test_local_preview_varies_on_screen_without_a_device(self):
+        window = self.make_window()
+        canvas = window.canvas
+        route = window.display_points.copy()
+        canvas._random.seed(27)
+        with patch.object(window, "submit", side_effect=AssertionError("unexpected device operation")):
+            window.preview_button.click()
+            self.assertTrue(canvas.previewing)
+            speeds, offsets = [], []
+            for _ in range(80):
+                canvas._last_tick -= .15
+                canvas._advance_preview()
+                speeds.append(canvas.preview_speed)
+                offsets.append(canvas._pixel_offset.toTuple())
+            self.assertLess(min(speeds), 5)
+            self.assertGreater(max(speeds), 5)
+            self.assertTrue(all(4.85 - 1e-9 <= speed <= 5.15 + 1e-9 for speed in speeds))
+            self.assertTrue(all(x*x + y*y <= 9.00001 for x, y in offsets))
+            self.assertGreater(len(set(offsets)), 1)
+            self.assertIsNone(canvas.marker)
+            self.assertEqual(window.display_points, route)
+            self.assertIn("本地预演", window.map_state.text())
+            self.assertFalse(canvas.grab().isNull())
+            window.speed.setText("4.9")
+            self.assertFalse(canvas.previewing)
+            self.assertEqual(window.map_state.text(), "路线预览")
+
+    def test_local_preview_finishes_after_one_traversal(self):
+        window = self.make_window()
+        canvas = window.canvas
+        window.preview_button.click()
+        canvas._last_tick -= window.distance / 5 * 2
+        canvas._advance_preview()
+        self.assertFalse(canvas.previewing)
+        self.assertEqual(window.preview_button.text(), "本地预演")
+        self.assertIsNone(canvas.marker)
+
     def test_drawing_templates_apply_to_the_desktop_with_their_closure(self):
         window = self.make_window()
         self.assertEqual(window.map_style_box.currentData(), "city")

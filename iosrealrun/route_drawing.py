@@ -123,7 +123,7 @@ def _template(kind):
     return vertices + vertices[:1]
 
 
-def shape_route(kind, corners):
+def shape_route(kind, corners, *, lettering_direction="auto"):
     """Fit a single stroke inside the two selected map corners, leaving a small margin."""
     if kind not in SHAPES or len(corners) != 2:
         return []
@@ -136,12 +136,20 @@ def shape_route(kind, corners):
     if min(width, height) * scale < 1:
         return []
     vertices = _template(kind)
-    if height > width and kind in ("ikun", "eight"):
+    upright = height > width
+    if kind == "ikun" and lettering_direction != "auto":
+        upright = lettering_direction == "vertical"
+    if upright and kind in ("ikun", "eight"):
         vertices = [(-y, x) for x, y in vertices]
     xs, ys = zip(*vertices)
     left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
     sx, sy = .92 * width / (right - left), .92 * height / (bottom - top)
-    if kind in ("ikun", "heart"):
+    if kind == "ikun":
+        # Use both dimensions of the selected box. Limit distortion in very thin boxes.
+        sx = .97 * width / (right - left)
+        sy = .97 * height / (bottom - top)
+        sx, sy = min(sx, 3.5 * sy), min(sy, 3.5 * sx)
+    elif kind == "heart":
         sx = sy = min(sx, sy)
     xy = [((x0 + x1) / 2 + (x - (left + right) / 2) * sx,
            (y0 + y1) / 2 + (y - (top + bottom) / 2) * sy) for x, y in vertices]

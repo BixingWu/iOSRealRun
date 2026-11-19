@@ -54,3 +54,18 @@ class RouteDrawingTests(unittest.TestCase):
         route = shape_route("eight", corners)
         self.assertTrue(route)
         self.assertTrue(all(math.isfinite(p["lat"]) and abs(p["lng"]) > 179.9995 for p in route))
+
+    def test_large_letters_fill_the_box_and_allow_explicit_orientation(self):
+        box = [{"lat": 30, "lng": 120}, {"lat": 30.0015, "lng": 120.001}]
+        auto = shape_route("ikun", box)
+        horizontal = shape_route("ikun", box, lettering_direction="horizontal")
+        vertical = shape_route("ikun", box, lettering_direction="vertical")
+        self.assertEqual(auto, vertical)
+        self.assertNotEqual(horizontal, vertical)
+        for key in ("lat", "lng"):
+            coords = [point[key] for point in vertical]
+            low, high = box[0][key], box[1][key]
+            self.assertGreater((max(coords) - min(coords)) / (high - low), .92)
+            self.assertTrue(all(low < value < high for value in coords))
+        self.assertGreater(horizontal[-1]["lng"] - horizontal[0]["lng"], .0008)
+        self.assertGreater(vertical[0]["lat"] - vertical[-1]["lat"], .0013)
