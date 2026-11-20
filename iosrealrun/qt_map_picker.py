@@ -35,7 +35,7 @@ from iosrealrun.desktop_routes import MAX_ROUTE_POINTS, last_route_path
 from iosrealrun.drawing_drafts import DrawingDraft, draft_catalog, load_draft, save_draft
 from iosrealrun.qt_controls import CheckBox, ComboBox
 from iosrealrun.route_drawing import SHAPES, shape_layout, smooth_route, track_angle
-from iosrealrun.venue_reference import VenueComparison
+from iosrealrun.venue_overlay import VenueOverlay
 from iosrealrun.map_picker import (
     MAX_ZOOM,
     MIN_ZOOM,
@@ -132,6 +132,7 @@ class _MapCanvas(QWidget):
         self._closed_route = closed
         self._seed = list(initial_points)
         self.reference = self._seed.copy() if editable else []
+        self.venue_outline = []
         self.field_angle = field_angle if field_angle is not None else track_angle(self.reference)
         self.show_reference = bool(self.reference)
         self._guide_geometry = None
@@ -212,11 +213,11 @@ class _MapCanvas(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._fit_pending and self.width() > 10 and self.height() > 10:
-            self._frame(self._seed)
+            self._frame(self._seed + self.venue_outline)
             self._seed.clear()
             self._fit_pending = False
         elif not self._editable and self._auto_fit:
-            self._frame(self.points)
+            self._frame(self.points + self.venue_outline)
         self._place_controls()
         self._viewport_changed()
 
@@ -244,6 +245,21 @@ class _MapCanvas(QWidget):
         self.changed.emit()
         if self._loader and not self._dragging:
             self._debounce.start()
+
+    def frame_landmarks(self, points, *, manual=True):
+        if points:
+            if manual:
+                self._auto_fit = False
+            self._fit_pending = False
+            self._frame(points)
+            self._viewport_changed()
+
+    def set_venue_outline(self, points, *, fit=False):
+        self.venue_outline = list(points)
+        if fit and not self._fit_pending:
+            route = (self.controls or self.reference) if self._editable else self.points
+            self.frame_landmarks(route + self.venue_outline, manual=False)
+        self.update()
 
     def _draft_changed(self):
         self.placement_outline = []
@@ -358,6 +374,8 @@ class _MapCanvas(QWidget):
         painter.setClipPath(outline)
         painter.fillRect(self.rect(), QColor("#243235" if self.map_style == "dark" else MAP_BACKGROUND))
         self._paint_tiles(painter)
+        if self.venue_outline:
+            self._paint_venue(painter)
         if self._editable:
             self._paint_guides(painter)
         self._paint_route(painter)
@@ -380,6 +398,24 @@ class _MapCanvas(QWidget):
     def _screen_path(self, points):
         return QPolygonF([QPointF(x, y) for x, y in
                           _route_pixels(points, self._zoom, self._x, self._y, self.width(), self.height())])
+
+    def _paint_venue(self, painter):
+        line = self._screen_path(self.venue_outline)
+        bounds = line.boundingRect()
+        world = TILE_SIZE * 2 ** self._zoom
+        red = QColor("#ff858b" if self.map_style == "dark" else "#ce3947")
+        shade = QColor(red)
+        shade.setAlpha(14)
+        for copy in range(math.ceil((-bounds.right() - 3) / world),
+                          math.floor((self.width() - bounds.left() + 3) / world) + 1):
+            painter.save()
+            painter.translate(copy * world, 0)
+            painter.setBrush(shade)
+            pen = QPen(red, 2.6)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPolygon(line)
+            painter.restore()
 
     def _paint_guides(self, painter):
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -690,7 +726,7 @@ class MapPreview(_MapCanvas):
     def fit_route(self):
         self._auto_fit = True
         self._fit_pending = False
-        self._frame(self.points)
+        self._frame(self.points + self.venue_outline)
         self._viewport_changed()
 
     def set_marker(self, point):
@@ -784,7 +820,7 @@ class MapPicker(QDialog):
     mapStyleChanged = Signal(str)
 
     def __init__(self, parent, initial_points, on_apply, closed=False, *, load_tiles=True, style=DEFAULT_STYLE,
-                 venues=None, field_angle=None, draft_dir=None, venue_name=""):
+                 venues=None, field_angle=None, draft_dir=None, venue_name="", alignment_dir=None):
         super().__init__(parent)
         self.setObjectName("routePicker")
         self.setWindowTitle("绘制路线")
@@ -840,8 +876,8 @@ class MapPicker(QDialog):
         layout.addWidget(self.coordinate_panel)
 
         self.canvas = _MapCanvas(self, initial_points, closed, load_tiles, style=style, field_angle=field_angle)
-        self.comparison = VenueComparison(self.canvas, venues)
-        toolbar.insertWidget(1, self.comparison.button)
+        self.venues = VenueOverlay(self.canvas, venues, alignment_dir)
+        toolbar.insertWidget(1, self.venues)
         tools = QHBoxLayout()
         self.shape_box = ComboBox(self)
         self.shape_box.setAccessibleName("绘制方式")
@@ -876,7 +912,7 @@ class MapPicker(QDialog):
         tools.addStretch()
         layout.addLayout(tools)
         self.style_box.currentIndexChanged.connect(self._select_style)
-        layout.addWidget(self.comparison, 1)
+        layout.addWidget(self.canvas, 1)
 
         footer = QHBoxLayout()
         self.summary = QLabel(self)
@@ -942,7 +978,7 @@ class MapPicker(QDialog):
     def save_draft_dialog(self):
         dialog, form, message, submit = self._draft_form("保存草稿", "保存")
         venue = QLineEdit(self.venue_name if self.draft_id else
-                          (self.comparison.selector.currentText() or self.venue_name or "自选场地"), dialog)
+                          (self.venues.title or self.venue_name or "自选场地"), dialog)
         title = QLineEdit(self.draft_title or SHAPES.get(self.canvas.shape, "手绘路线"), dialog)
         for caption, field in (("场地", venue), ("草稿名称", title)):
             field.setMaxLength(160)
@@ -970,7 +1006,7 @@ class MapPicker(QDialog):
         venue, title = venue.strip(), title.strip()
         draft = DrawingDraft(title, venue, canvas.shape or "", canvas.points, canvas.corners, canvas.reference,
                              canvas._closed_route, canvas.smoothing, canvas.show_reference, canvas.lettering_direction,
-                             canvas.field_angle, canvas.rotation, self.comparison.selector.currentText())
+                             canvas.field_angle, canvas.rotation, self.venues.title)
         same_name = (venue, title) == (self.venue_name, self.draft_title)
         self.draft_id = save_draft(self.draft_dir, draft, self.draft_id if same_name else None)
         self.venue_name, self.draft_title = venue, title
@@ -1035,11 +1071,11 @@ class MapPicker(QDialog):
                 box.setChecked(value)
         self.reference_box.setEnabled(bool(draft.reference))
         self._update_direction_hint()
-        self.comparison.select_route(draft.reference_venue or draft.venue)
+        self.venues.select_route(draft.reference_venue or draft.venue, canvas.controls)
         self.draft_id, self.venue_name, self.draft_title = identifier, draft.venue, draft.title
         self.setWindowTitle(f"绘制路线 · {draft.venue} · {draft.title}")
         canvas._fit_pending = False
-        canvas._frame(canvas.controls or canvas.reference)
+        canvas._frame((canvas.controls or canvas.reference) + canvas.venue_outline)
         canvas._draft_changed()
         canvas._viewport_changed()
 
@@ -1106,9 +1142,9 @@ class MapPicker(QDialog):
 
 
 def open_map_picker(parent, initial_points, on_apply, *, closed=False, load_tiles=True, style=DEFAULT_STYLE,
-                    venues=None, field_angle=None, draft_dir=None, venue_name=""):
+                    venues=None, field_angle=None, draft_dir=None, venue_name="", alignment_dir=None):
     """Open an empty draft fitted to the current route and return the dialog."""
     dialog = MapPicker(parent, initial_points, on_apply, closed, load_tiles=load_tiles, style=style, venues=venues,
-                       field_angle=field_angle, draft_dir=draft_dir, venue_name=venue_name)
+                       field_angle=field_angle, draft_dir=draft_dir, venue_name=venue_name, alignment_dir=alignment_dir)
     dialog.open()
     return dialog

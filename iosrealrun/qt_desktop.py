@@ -28,7 +28,7 @@ from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, bundled_route, resolve_ro
 from iosrealrun.qt_controls import CheckBox, ComboBox
 from iosrealrun.qt_map_picker import DEFAULT_STYLE, MAP_STYLES, MapPreview, open_map_picker
 from iosrealrun.route_drawing import SHAPES
-from iosrealrun.venue_reference import VenueComparison
+from iosrealrun.venue_overlay import VenueOverlay
 from iosrealrun.run import to_wgs84
 
 
@@ -484,8 +484,8 @@ class Desktop(QMainWindow):
         self.map_style_box.setCurrentIndex(self.map_style_box.findData(DEFAULT_STYLE))
         toolbar.addWidget(self.map_style_box)
         self.canvas = MapPreview(load_tiles=self.load_tiles, style=self.map_style_box.currentData())
-        self.comparison = VenueComparison(self.canvas)
-        context.addWidget(self.comparison.button)
+        self.venues = VenueOverlay(self.canvas)
+        context.addWidget(self.venues)
         self.canvas.changed.connect(self.update_map_status)
         self.map_style_box.currentIndexChanged.connect(
             lambda: self.canvas.set_map_style(self.map_style_box.currentData()))
@@ -499,7 +499,7 @@ class Desktop(QMainWindow):
         toolbar.addWidget(fit_button)
         layout.addLayout(toolbar)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        layout.addWidget(self.comparison, 1)
+        layout.addWidget(self.canvas, 1)
         self.preview_controls = QWidget()
         playback = QHBoxLayout(self.preview_controls)
         playback.setContentsMargins(2, 0, 2, 0)
@@ -729,13 +729,14 @@ class Desktop(QMainWindow):
         def apply(points):
             name = dialog.draft_title or SHAPES.get(dialog.canvas.shape, "地图路线")
             self.set_route(points, name, "wgs84", dialog.canvas.route_closed, field_angle=dialog.canvas.field_angle)
-            self.comparison.copy_view(dialog.comparison)
+            self.venues.copy_view(dialog.venues)
 
         dialog = open_map_picker(self, reference, apply,
                                  style=self.map_style_box.currentData(), load_tiles=self.load_tiles,
-                                 venues=self.comparison.entries.values(), field_angle=self.drawing_field_angle,
-                                 draft_dir=self.draft_dir, venue_name=self.route_name)
-        dialog.comparison.copy_view(self.comparison)
+                                 venues=self.venues.entries.values(), field_angle=self.drawing_field_angle,
+                                 draft_dir=self.draft_dir, venue_name=self.route_name, alignment_dir=self.venues.alignment_dir)
+        dialog.venues.copy_view(self.venues, focus_venue=True)
+        dialog.venues.alignmentChanged.connect(self.venues.reload_alignment)
         dialog.mapStyleChanged.connect(
             lambda style: self.map_style_box.setCurrentIndex(self.map_style_box.findData(style)))
         return dialog
@@ -835,10 +836,10 @@ class Desktop(QMainWindow):
         self.points = points
         self.route_name = name
         self.drawing_field_angle = field_angle
-        self.comparison.select_route(name)
         self.update_route_choices()
         self.show_status("")
         self.update_route()
+        self.venues.select_route(name, self.display_points, fit=True)
         if remember:
             self.remember_route()
 
