@@ -3,11 +3,58 @@ import unittest
 from itertools import pairwise
 
 from iosrealrun.desktop_routes import MAX_ROUTE_POINTS
-from iosrealrun.route_drawing import SHAPES, shape_route, smooth_route
+from iosrealrun.map_picker import _project, _unproject
+from iosrealrun.route_drawing import SHAPES, shape_layout, shape_route, smooth_route, track_angle
 from iosrealrun.run import geodistance
 
 
 class RouteDrawingTests(unittest.TestCase):
+    def track_point(self, u, v, angle, lng=120):
+        cx, cy = _project({"lat": 30, "lng": lng}, 19)
+        c, s = math.cos(angle), math.sin(angle)
+        return _unproject(cx + u * c - v * s, cy + u * s + v * c, 19)
+
+    def test_track_angle_is_stable_with_uneven_sampling_reversal_and_wrapping(self):
+        corners = [(-140, -42), (140, -42), (140, 42), (-140, 42), (-140, -42)]
+        dense = corners[:1] + [(i, -42) for i in range(-139, 140)] + corners[1:]
+        for degrees in (-32, 0, 35, 78, 90, 113):
+            angle = math.radians(degrees)
+            for ring in (corners, dense, dense[::-1], corners[:-1] + [(-140, -38)]):
+                points = [self.track_point(u, v, angle, 179.99998) for u, v in ring]
+                with self.subTest(degrees=degrees, start=ring[0], length=len(ring)):
+                    self.assertAlmostEqual(track_angle(points), angle, places=6)
+        for points in ([], [corners[0]], corners[:3], [(0, 0), (30, 0), (50, 0), (0, 0)],
+                       [(-30, -30), (30, -30), (30, 30), (-30, 30), (-30, -30)]):
+            self.assertIsNone(track_angle([self.track_point(u, v, .37) for u, v in points]))
+
+    def test_letters_and_selection_share_the_tracks_rotated_frame(self):
+        angle = math.radians(72)
+        corners = [self.track_point(-160, -40, angle), self.track_point(160, 40, angle)]
+        route, frame = shape_layout("ikun", corners, field_angle=angle)
+        cx, cy = _project({"lat": 30, "lng": 120}, 19)
+
+        def offsets(point):
+            x, y = _project(point, 19)
+            dx, dy = x - cx, y - cy
+            return dx * math.cos(angle) + dy * math.sin(angle), dy * math.cos(angle) - dx * math.sin(angle)
+
+        for point, (u, v) in zip(frame, ((-160, -40), (160, -40), (160, 40), (-160, 40)), strict=True):
+            along, across = offsets(point)
+            self.assertAlmostEqual(along, u, places=5)
+            self.assertAlmostEqual(across, v, places=5)
+        baseline, height = zip(*(offsets(point) for point in route))
+        self.assertGreater(baseline[-1] - baseline[0], 305)
+        self.assertGreater(max(height) - min(height), 72)
+        self.assertTrue(all(abs(u) < 160 and abs(v) < 40 for u, v in zip(baseline, height)))
+        reversed_route, _ = shape_layout("ikun", corners[::-1], field_angle=angle)
+        for a, b in zip(route, reversed_route, strict=True):
+            self.assertAlmostEqual(a["lng"], b["lng"], places=9)
+            self.assertAlmostEqual(a["lat"], b["lat"], places=9)
+        for mode in ("horizontal", "vertical"):
+            self.assertEqual(shape_layout("ikun", corners, lettering_direction=mode, field_angle=angle),
+                             shape_layout("ikun", corners, lettering_direction=mode))
+        self.assertEqual(shape_layout("oval", corners, field_angle=angle), shape_layout("oval", corners))
+
     def test_hand_drawn_corner_is_rounded_and_evenly_spaced(self):
         a = {"lat": 30.0, "lng": 120.0}
         bend = {"lat": 30.0, "lng": 120.001}

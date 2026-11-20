@@ -227,6 +227,7 @@ class Desktop(QMainWindow):
         self.points = []
         self.display_points = []
         self.route_name = ""
+        self.drawing_field_angle = None
         self.distance = 0.0
         self.busy = None
         self.scanning = False
@@ -647,12 +648,12 @@ class Desktop(QMainWindow):
 
         def apply(points):
             name = SHAPES.get(dialog.canvas.shape, "地图路线")
-            self.set_route(points, name, "wgs84", dialog.canvas.route_closed)
+            self.set_route(points, name, "wgs84", dialog.canvas.route_closed, field_angle=dialog.canvas.field_angle)
             self.comparison.copy_view(dialog.comparison)
 
         dialog = open_map_picker(self, reference, apply,
                                  style=self.map_style_box.currentData(), load_tiles=self.load_tiles,
-                                 venues=self.comparison.entries.values())
+                                 venues=self.comparison.entries.values(), field_angle=self.drawing_field_angle)
         dialog.comparison.copy_view(self.comparison)
         dialog.mapStyleChanged.connect(
             lambda style: self.map_style_box.setCurrentIndex(self.map_style_box.findData(style)))
@@ -742,7 +743,7 @@ class Desktop(QMainWindow):
             self.route_box.setCurrentIndex(self.route_box.findText(self.route_name))
         self.route_box.blockSignals(False)
 
-    def set_route(self, points, name, system=None, closed=True, *, remember=True):
+    def set_route(self, points, name, system=None, closed=True, *, remember=True, field_angle=None):
         if system:
             self.select_system(system)
         if self.closed.isChecked() != closed:
@@ -752,6 +753,7 @@ class Desktop(QMainWindow):
             self.update_lap_mode(closed)
         self.points = points
         self.route_name = name
+        self.drawing_field_angle = field_angle
         self.comparison.select_route(name)
         self.update_route_choices()
         self.show_status("")

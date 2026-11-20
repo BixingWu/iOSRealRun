@@ -121,6 +121,40 @@ class DesktopUITests(unittest.TestCase):
             self.assertEqual(window.closed.isChecked(), closed)
             self.assertEqual(window.laps.text(), "100" if closed else "1")
 
+    def test_ikun_follows_the_selected_track_through_drawing_and_reopening(self):
+        window = self.make_window()
+        picker = window.pick_route()
+        canvas = picker.canvas
+        picker.shape_box.setCurrentIndex(picker.shape_box.findData("ikun"))
+        self.assertEqual(picker.direction_box.currentText(), "沿操场长边")
+        field_angle = canvas.field_angle
+        center = QPointF(canvas.rect().center())
+        canvas.add_point(center - QPointF(68, 90))
+        canvas.add_point(center + QPointF(68, 90))
+        expected = canvas.draft_route.copy()
+        guide = canvas.placement_outline.copy()
+        self.assertEqual(len(guide), 4)
+        self.assertNotAlmostEqual(guide[0]["lat"], guide[1]["lat"], places=6)
+        self.assertNotAlmostEqual(guide[0]["lng"], guide[1]["lng"], places=6)
+        picker.reference_box.click()
+        canvas.zoom(1)
+        self.assertEqual(canvas.draft_route, expected)
+        self.assertEqual(canvas.placement_outline, guide)
+        picker.direction_box.setCurrentIndex(picker.direction_box.findData("horizontal"))
+        self.assertNotEqual(canvas.placement_outline, guide)
+        picker.direction_box.setCurrentIndex(picker.direction_box.findData("auto"))
+        picker.apply_button.click()
+        self.assertEqual(window.display_points, expected)
+        again = window.pick_route()
+        self.assertEqual(again.canvas.field_angle, field_angle)
+        again.reject()
+        window.set_route([{"lat": 30, "lng": 120}, {"lat": 30.01, "lng": 120.02}], "步道",
+                         "wgs84", closed=False, remember=False)
+        other = window.pick_route()
+        self.assertIsNone(other.canvas.field_angle)
+        self.assertEqual(other.direction_box.currentText(), "沿选框长边")
+        other.reject()
+
     def test_closed_laps_survive_switching_to_an_open_route(self):
         window = self.make_window()
         self.assertEqual(float(window.speed.text()), 5)

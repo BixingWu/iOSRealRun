@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 
 from iosrealrun.desktop_routes import MAX_ROUTE_POINTS
 from iosrealrun.qt_controls import CheckBox, ComboBox
-from iosrealrun.route_drawing import SHAPES, shape_route, smooth_route
+from iosrealrun.route_drawing import SHAPES, shape_layout, smooth_route, track_angle
 from iosrealrun.venue_reference import VenueComparison
 from iosrealrun.map_picker import (
     MAX_ZOOM,
@@ -101,7 +101,8 @@ QCheckBox::indicator:checked { background: #0874e8; border-color: #0874e8; }
 class _MapCanvas(QWidget):
     changed = Signal()
 
-    def __init__(self, parent, initial_points, closed, load_tiles, *, editable=True, style=DEFAULT_STYLE):
+    def __init__(self, parent, initial_points, closed, load_tiles, *, editable=True, style=DEFAULT_STYLE,
+                 field_angle=None):
         super().__init__(parent)
         self.setMinimumHeight(190 if editable else 105)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -116,6 +117,7 @@ class _MapCanvas(QWidget):
         self.shape = None
         self.lettering_direction = "auto"
         self.corners = []
+        self.placement_outline = []
         self.smoothing = True
         self.draft_route = []
         self.marker = None
@@ -123,6 +125,7 @@ class _MapCanvas(QWidget):
         self._closed_route = closed
         self._seed = list(initial_points)
         self.reference = self._seed.copy() if editable else []
+        self.field_angle = field_angle if field_angle is not None else track_angle(self.reference)
         self.show_reference = bool(self.reference)
         self._guide_geometry = None
         self._fit_pending = True
@@ -236,8 +239,10 @@ class _MapCanvas(QWidget):
             self._debounce.start()
 
     def _draft_changed(self):
+        self.placement_outline = []
         if self.shape:
-            self.draft_route = shape_route(self.shape, self.corners, lettering_direction=self.lettering_direction)
+            self.draft_route, self.placement_outline = shape_layout(
+                self.shape, self.corners, lettering_direction=self.lettering_direction, field_angle=self.field_angle)
         elif self.smoothing:
             self.draft_route = smooth_route(self.points, closed=self._closed_route)
         else:
@@ -370,8 +375,8 @@ class _MapCanvas(QWidget):
         if self.shape and self.corners:
             corners = self._screen_path(self.corners)
             painter.setPen(QPen(QColor("#4d77ab"), 1.2, Qt.PenStyle.DashLine))
-            if len(corners) == 2:
-                painter.drawRect(QRectF(corners.first(), corners.last()).normalized())
+            if self.placement_outline:
+                painter.drawPolygon(self._screen_path(self.placement_outline))
             painter.setBrush(QColor("#ffffff"))
             for corner in corners:
                 painter.drawRect(QRectF(corner.x() - 3, corner.y() - 3, 6, 6))
@@ -636,7 +641,7 @@ class MapPicker(QDialog):
     mapStyleChanged = Signal(str)
 
     def __init__(self, parent, initial_points, on_apply, closed=False, *, load_tiles=True, style=DEFAULT_STYLE,
-                 venues=None):
+                 venues=None, field_angle=None):
         super().__init__(parent)
         self.setObjectName("routePicker")
         self.setWindowTitle("绘制路线")
@@ -687,7 +692,7 @@ class MapPicker(QDialog):
         self.coordinate_panel.hide()
         layout.addWidget(self.coordinate_panel)
 
-        self.canvas = _MapCanvas(self, initial_points, closed, load_tiles, style=style)
+        self.canvas = _MapCanvas(self, initial_points, closed, load_tiles, style=style, field_angle=field_angle)
         self.comparison = VenueComparison(self.canvas, venues)
         toolbar.insertWidget(1, self.comparison.button)
         tools = QHBoxLayout()
@@ -700,8 +705,11 @@ class MapPicker(QDialog):
         tools.addWidget(self.shape_box)
         self.direction_box = ComboBox(self)
         self.direction_box.setAccessibleName("字样方向")
-        self.direction_box.setToolTip("字样会在选框内尽量放大，自动方向沿选框的长边排列")
-        for name, direction in (("自动朝向", "auto"), ("横排", "horizontal"), ("竖排", "vertical")):
+        follows_track = self.canvas.field_angle is not None
+        self.direction_box.setToolTip("字样和选框一起沿参考跑道的长边旋转" if follows_track
+                                     else "当前没有可辨认长边的参考跑道，字样按选框长边排列")
+        auto_name = "沿操场长边" if follows_track else "沿选框长边"
+        for name, direction in ((auto_name, "auto"), ("横排", "horizontal"), ("竖排", "vertical")):
             self.direction_box.addItem(name, direction)
         self.direction_box.currentIndexChanged.connect(
             lambda: self.canvas.set_lettering_direction(self.direction_box.currentData()))
@@ -789,7 +797,7 @@ class MapPicker(QDialog):
         if shape:
             self.hint.setText("在操场内点选区域的两个对角，可再次点选调整第二个角")
             parts = ["选第一个角" if not count else "选对角"] if count < 2 else [
-                f"{SHAPES[shape]} · {output_count} 个路线点" if output_count else "请拉开两个角的距离"]
+                f"{SHAPES[shape]} · {output_count} 个路线点" if output_count else "请选斜对角，给选框留出长度和宽度"]
         else:
             self.hint.setText("点击选点，拖动平移，滚轮缩放")
             if self.canvas.smoothing and count >= 3:
@@ -816,8 +824,9 @@ class MapPicker(QDialog):
 
 
 def open_map_picker(parent, initial_points, on_apply, *, closed=False, load_tiles=True, style=DEFAULT_STYLE,
-                    venues=None):
+                    venues=None, field_angle=None):
     """Open an empty draft fitted to the current route and return the dialog."""
-    dialog = MapPicker(parent, initial_points, on_apply, closed, load_tiles=load_tiles, style=style, venues=venues)
+    dialog = MapPicker(parent, initial_points, on_apply, closed, load_tiles=load_tiles, style=style, venues=venues,
+                       field_angle=field_angle)
     dialog.open()
     return dialog

@@ -29,6 +29,43 @@ def _metres_per_unit(points):
     return EARTH_CIRCUMFERENCE * math.cos(math.radians(latitude)) / TILE_SIZE
 
 
+def track_angle(points):
+    """Principal axis of a lap, in map radians (east = 0, south = π/2)."""
+    projected = _project_line(points)
+    if len(projected) < 3:
+        return None
+    origin_x, origin_y = projected[0]
+    local = [(x - origin_x, y - origin_y) for x, y in projected]
+    gap = math.dist(local[0], local[-1])
+    if gap:
+        local.append(local[0])
+    length = area_twice = 0.0
+    first_x = first_y = second_x = second_y = cross = 0.0
+    for (x0, y0), (x1, y1) in pairwise(local):
+        dx, dy = x1 - x0, y1 - y0
+        span = math.hypot(dx, dy)
+        x, y = (x0 + x1) / 2, (y0 + y1) / 2
+        length += span
+        area_twice += x0 * y1 - x1 * y0
+        first_x += span * x
+        first_y += span * y
+        # Integrate the full segment so extra points on one straight don't skew the axis.
+        second_x += span * (x * x + dx * dx / 12)
+        second_y += span * (y * y + dy * dy / 12)
+        cross += span * (x * y + dx * dy / 12)
+    # Accept sampled laps that stop just short of their start; ignore open lines.
+    if gap > .10 * length or abs(area_twice) <= 1e-9 * length * length:
+        return None
+    xx = second_x - first_x * first_x / length
+    yy = second_y - first_y * first_y / length
+    xy = cross - first_x * first_y / length
+    if math.hypot(xx - yy, 2 * xy) <= .10 * (xx + yy):
+        return None  # Near-circular outlines have no distinct long axis.
+    angle = math.atan2(2 * xy, xx - yy) / 2
+    # Read left to right on a horizontal track and top to bottom on a vertical one.
+    return angle + math.pi if angle < -math.pi / 4 else angle
+
+
 def _mix(first, last, fraction):
     return (first[0] + (last[0] - first[0]) * fraction,
             first[1] + (last[1] - first[1]) * fraction)
@@ -123,20 +160,31 @@ def _template(kind):
     return vertices + vertices[:1]
 
 
-def shape_route(kind, corners, *, lettering_direction="auto"):
-    """Fit a single stroke inside the two selected map corners, leaving a small margin."""
+def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None):
+    """Return the fitted stroke and its four-corner map outline for drawing the guide."""
     if kind not in SHAPES or len(corners) != 2:
-        return []
+        return [], []
     box = _project_line(corners)
     if len(box) != 2:
-        return []
+        return [], []
     (x0, y0), (x1, y1) = box
-    width, height = abs(x1 - x0), abs(y1 - y0)
+    aligned = kind == "ikun" and lettering_direction == "auto" and field_angle is not None
+    angle = field_angle if aligned else 0.0
+    ux, uy = math.cos(angle), math.sin(angle)
+    dx, dy = x1 - x0, y1 - y0
+    width, height = abs(dx * ux + dy * uy), abs(dy * ux - dx * uy)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+
+    def place(x, y):
+        return cx + (x * ux - y * uy), cy + (x * uy + y * ux)
+
+    outline = [_unproject(*place(i * width / 2, j * height / 2), 0)
+               for i, j in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
     scale = _metres_per_unit(corners)
     if min(width, height) * scale < 1:
-        return []
+        return [], outline
     vertices = _template(kind)
-    upright = height > width
+    upright = height > width and not aligned
     if kind == "ikun" and lettering_direction != "auto":
         upright = lettering_direction == "vertical"
     if upright and kind in ("ikun", "eight"):
@@ -151,6 +199,11 @@ def shape_route(kind, corners, *, lettering_direction="auto"):
         sx, sy = min(sx, 3.5 * sy), min(sy, 3.5 * sx)
     elif kind == "heart":
         sx = sy = min(sx, sy)
-    xy = [((x0 + x1) / 2 + (x - (left + right) / 2) * sx,
-           (y0 + y1) / 2 + (y - (top + bottom) / 2) * sy) for x, y in vertices]
-    return _sample(xy, scale, closed=kind != "ikun", minimum=96)
+    xy = [place((x - (left + right) / 2) * sx, (y - (top + bottom) / 2) * sy)
+          for x, y in vertices]
+    return _sample(xy, scale, closed=kind != "ikun", minimum=96), outline
+
+
+def shape_route(kind, corners, *, lettering_direction="auto", field_angle=None):
+    route, _ = shape_layout(kind, corners, lettering_direction=lettering_direction, field_angle=field_angle)
+    return route
