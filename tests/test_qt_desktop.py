@@ -6,12 +6,12 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF
-from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QPlainTextEdit, QPushButton
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QLabel, QPlainTextEdit, QPushButton
 
 from iosrealrun.app_version import VERSION
 from iosrealrun.desktop_device import Device
@@ -93,6 +93,80 @@ class DesktopUITests(unittest.TestCase):
             window.speed.setText("4.9")
             self.assertFalse(canvas.previewing)
             self.assertEqual(window.map_state.text(), "路线预览")
+
+    def test_pace_inputs_sync_validate_and_show_total_distance(self):
+        window = self.make_window()
+        window.receive("scan", True, [Device("test", "iPhone", "15.6")])
+        self.assertEqual(window.pace.text(), "3:20")
+        for pace in ("3:20/km", "320", "3：20"):
+            window.pace.setText(pace)
+            self.assertEqual(float(window.speed.text()), 5)
+            self.assertTrue(window.start_button.isEnabled())
+        window.speed.setText("4")
+        self.assertEqual(window.pace.text(), "4:10")
+        window.pace.setText("4:00/km")
+        self.assertAlmostEqual(float(window.speed.text()), 1000 / 240, places=10)
+        window.format_pace()
+        self.assertEqual(window.pace.text(), "4:00")
+        for bad in ("", "3:", "3:75", "0:00", "0:30", "999:59", "3:20 xyz"):
+            window.pace.setText(bad)
+            self.assertEqual(window.speed.text(), "")
+            self.assertFalse(window.preview_button.isEnabled())
+            self.assertFalse(window.start_button.isEnabled())
+            self.assertIn("配速", window.parameter_hint.text())
+        window.speed.setText("5")
+        window.distance = 459
+        window.update_estimates()
+        self.assertEqual(window.total_distance_text.text(), "45.9 km")
+        window.laps.setText("0")
+        self.assertEqual(window.total_distance_text.text(), "持续循环")
+        window.laps.setText("bad")
+        self.assertEqual(window.total_distance_text.text(), "—")
+        window.closed.setChecked(False)
+        self.assertEqual(window.laps.text(), "1")
+        self.assertEqual(window.total_distance_text.text(), window.distance_text.text())
+
+    def test_preview_rate_and_seek_are_local_and_reset_on_stop(self):
+        window = self.make_window()
+        window.preview_button.click()
+        canvas = window.canvas
+        self.assertTrue(window.preview_controls.isVisible())
+        window.preview_rate_box.setCurrentIndex(window.preview_rate_box.findData(4))
+        window.preview_slider.setValue(400)
+        self.assertEqual(canvas.preview_fraction, .4)
+        self.assertEqual(window.preview_percent.text(), "40%")
+        canvas.set_seeking(True)
+        canvas._last_tick -= 12
+        canvas._advance_preview()
+        self.assertEqual(canvas.preview_fraction, .4)
+        canvas.set_seeking(False)
+        canvas._last_tick -= 1
+        canvas._advance_preview()
+        self.assertAlmostEqual(canvas.preview_fraction, .4 + 20 / window.distance, delta=.003)
+        self.assertTrue(4.85 <= canvas.preview_speed <= 5.15)
+        window.preview_button.click()
+        self.assertFalse(window.preview_controls.isVisible())
+        self.assertEqual(window.preview_slider.value(), 0)
+        window.preview_button.click()
+        self.assertEqual(canvas.preview_fraction, 0)
+        window.receive("scan", True, [Device("test", "iPhone", "15.6")])
+        with patch("iosrealrun.qt_desktop.replay_route", new_callable=Mock) as replay, patch.object(window, "submit"):
+            window.start_or_stop()
+        self.assertEqual(replay.call_args.kwargs["speed"], 5)
+        self.assertEqual(replay.call_args.kwargs["laps"], 100)
+
+    def test_help_shows_build_identifier_and_opens_the_manual_on_request(self):
+        window = self.make_window()
+        with patch("iosrealrun.qt_desktop.BUILD_ID", "20261120T033000Z-0123456789"), \
+                patch("iosrealrun.qt_desktop.QDesktopServices.openUrl") as open_url:
+            dialog = window.open_help()
+            text = " ".join(item.text() for item in dialog.findChildren(QLabel))
+            self.assertIn(VERSION, text)
+            self.assertIn("20261120T033000Z-0123456789", text)
+            open_url.assert_not_called()
+            next(b for b in dialog.findChildren(QPushButton) if b.text() == "打开使用手册").click()
+            self.assertEqual(open_url.call_args.args[0].toString(), "https://github.com/BixingWu/iOSRealRun#使用方法")
+            dialog.accept()
 
     def test_local_preview_finishes_after_one_traversal(self):
         window = self.make_window()

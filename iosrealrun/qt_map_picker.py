@@ -4,9 +4,9 @@ import math
 import queue
 import random
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QKeySequence,
@@ -19,6 +19,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -29,7 +31,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from iosrealrun.desktop_routes import MAX_ROUTE_POINTS
+from iosrealrun.desktop_routes import MAX_ROUTE_POINTS, last_route_path
+from iosrealrun.drawing_drafts import DrawingDraft, draft_catalog, load_draft, save_draft
 from iosrealrun.qt_controls import CheckBox, ComboBox
 from iosrealrun.route_drawing import SHAPES, shape_layout, smooth_route, track_angle
 from iosrealrun.venue_reference import VenueComparison
@@ -107,6 +110,7 @@ class _MapCanvas(QWidget):
         self.setMinimumHeight(190 if editable else 105)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._editable = editable
+        self.setMouseTracking(editable)
         self._auto_fit = not editable
         self._idle_cursor = Qt.CursorShape.CrossCursor if editable else Qt.CursorShape.OpenHandCursor
         self.setCursor(self._idle_cursor)
@@ -116,6 +120,9 @@ class _MapCanvas(QWidget):
         self.points = []
         self.shape = None
         self.lettering_direction = "auto"
+        self.rotation = 0.0
+        self._placement_drag = None
+        self._placement_history = deque(maxlen=40)
         self.corners = []
         self.placement_outline = []
         self.smoothing = True
@@ -242,7 +249,8 @@ class _MapCanvas(QWidget):
         self.placement_outline = []
         if self.shape:
             self.draft_route, self.placement_outline = shape_layout(
-                self.shape, self.corners, lettering_direction=self.lettering_direction, field_angle=self.field_angle)
+                self.shape, self.corners, lettering_direction=self.lettering_direction, field_angle=self.field_angle,
+                rotation=self.rotation)
         elif self.smoothing:
             self.draft_route = smooth_route(self.points, closed=self._closed_route)
         else:
@@ -267,7 +275,14 @@ class _MapCanvas(QWidget):
         self.smoothing = enabled
         self._draft_changed()
 
+    def set_hand_closure(self, closed):
+        self._closed_route = closed
+        self._draft_changed()
+
     def set_lettering_direction(self, direction):
+        if direction != self.lettering_direction:
+            self.rotation = 0.0
+            self._placement_history.clear()
         self.lettering_direction = direction
         self._draft_changed()
 
@@ -346,6 +361,8 @@ class _MapCanvas(QWidget):
         if self._editable:
             self._paint_guides(painter)
         self._paint_route(painter)
+        if self._editable and self.shape:
+            self._paint_handles(painter)
         painter.setClipping(False)
         painter.setPen(QColor(BORDER))
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -373,13 +390,74 @@ class _MapCanvas(QWidget):
             painter.setPen(pen)
             painter.drawPolyline(self._guide_geometry)
         if self.shape and self.corners:
-            corners = self._screen_path(self.corners)
             painter.setPen(QPen(QColor("#4d77ab"), 1.2, Qt.PenStyle.DashLine))
             if self.placement_outline:
                 painter.drawPolygon(self._screen_path(self.placement_outline))
-            painter.setBrush(QColor("#ffffff"))
-            for corner in corners:
-                painter.drawRect(QRectF(corner.x() - 3, corner.y() - 3, 6, 6))
+
+    def _placement_handles(self):
+        if not self.shape or not self.draft_route or len(self.placement_outline) != 4:
+            return {}
+        outline = self._screen_path(self.placement_outline)
+        center = (outline[0] + outline[2]) / 2
+        edge = (outline[0] + outline[1]) / 2
+        outward = edge - center
+        length = math.hypot(outward.x(), outward.y())
+        if not length:
+            return {}
+        return {"move": center, "rotate": edge + outward * (23 / length), **dict(enumerate(outline))}
+
+    def _paint_handles(self, painter):
+        handles = self._placement_handles()
+        painter.setPen(QPen(QColor("#366ba7"), 1.6))
+        painter.setBrush(QColor("#ffffff"))
+        if not handles:
+            for point in self._screen_path(self.corners):
+                painter.drawRect(QRectF(point.x() - 3, point.y() - 3, 6, 6))
+            return
+        painter.drawLine((handles[0] + handles[1]) / 2, handles["rotate"])
+        painter.drawEllipse(handles["rotate"], 5, 5)
+        for index in range(4):
+            point = handles[index]
+            painter.drawRect(QRectF(point.x() - 4, point.y() - 4, 8, 8))
+        center = handles["move"]
+        painter.drawEllipse(center, 7, 7)
+        painter.drawLine(center - QPointF(4, 0), center + QPointF(4, 0))
+        painter.drawLine(center - QPointF(0, 4), center + QPointF(0, 4))
+
+    @staticmethod
+    def _handle_at(position, handles):
+        nearby = [(math.hypot((point - position).x(), (point - position).y()), key)
+                  for key, point in handles.items()]
+        if nearby:
+            distance, key = min(nearby, key=lambda item: item[0])
+            if distance <= 10:
+                return key
+        return None
+
+    def _drag_placement(self, offset):
+        key, handles, corners, rotation = self._placement_drag
+        handle = handles[key]
+        if key == "move":
+            moved = [corner + offset for corner in corners]
+        elif key == "rotate":
+            center = handles["move"]
+            before, after = handle - center, handle + offset - center
+            if math.hypot(after.x(), after.y()) < 2:
+                return
+            delta = math.atan2(after.y(), after.x()) - math.atan2(before.y(), before.x())
+            cosine, sine = math.cos(delta), math.sin(delta)
+            moved = [center + QPointF(p.x() * cosine - p.y() * sine, p.x() * sine + p.y() * cosine)
+                     for p in (corner - center for corner in corners)]
+            rotation = math.remainder(rotation + delta, math.tau)
+        else:
+            anchor = handles[(key + 2) % 4]
+            diagonal = handle - anchor
+            scale = max(.05, 1 + QPointF.dotProduct(offset, diagonal) / QPointF.dotProduct(diagonal, diagonal))
+            moved = [anchor + (corner - anchor) * scale for corner in corners]
+        result = [self._map_point(point) for point in moved]
+        if all(result):
+            self.corners, self.rotation = result, rotation
+            self._draft_changed()
 
     def _paint_route(self, painter):
         points = self.draft_route if self._editable else self.points
@@ -452,29 +530,51 @@ class _MapCanvas(QWidget):
         self.setFocus()
         self._press = event.position(), self._x, self._y
         self._dragging = False
+        handles = self._placement_handles()
+        key = self._handle_at(event.position(), handles)
+        if key is not None:
+            self._placement_drag = key, handles, self._screen_path(self.corners), self.rotation
         event.accept()
 
     def mouseMoveEvent(self, event):
         if self._press is None:
+            if self._editable and self.shape:
+                key = self._handle_at(event.position(), self._placement_handles())
+                self.setCursor(Qt.CursorShape.OpenHandCursor if key is not None else self._idle_cursor)
             return super().mouseMoveEvent(event)
         origin, x, y = self._press
         offset = origin - event.position()
         if self._dragging or math.hypot(offset.x(), offset.y()) >= 5:
+            if self._placement_drag is not None and not self._dragging:
+                self._placement_history.append((self.corners.copy(), self.rotation))
             self._dragging = True
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
-            self._set_center(x + offset.x(), y + offset.y())
+            if self._placement_drag is not None:
+                self._drag_placement(-offset)
+            else:
+                self._set_center(x + offset.x(), y + offset.y())
         event.accept()
 
     def mouseReleaseEvent(self, event):
         if self._press is None or event.button() != Qt.MouseButton.LeftButton:
             return super().mouseReleaseEvent(event)
-        self._press = None
-        if self._dragging:
+        origin, _, _ = self._press
+        if self._placement_drag is not None:
+            offset = event.position() - origin
+            if self._dragging or math.hypot(offset.x(), offset.y()) >= 5:
+                if not self._dragging:
+                    self._placement_history.append((self.corners.copy(), self.rotation))
+                self._drag_placement(offset)
+            self._placement_drag = None
+            self._dragging = False
+            self.setCursor(self._idle_cursor)
+        elif self._dragging:
             self._dragging = False
             self.setCursor(self._idle_cursor)
             self._viewport_changed()
         elif self._editable:
             self.add_point(event.position())
+        self._press = None
         event.accept()
 
     def wheelEvent(self, event):
@@ -519,18 +619,25 @@ class _MapCanvas(QWidget):
         self._zoom = 16
         self._set_center(*_project(point, self._zoom))
 
+    def _map_point(self, point):
+        x = self._x + point.x() - self.width() / 2
+        y = self._y + point.y() - self.height() / 2
+        if 0 <= y <= TILE_SIZE * 2 ** self._zoom:
+            return _unproject(x, y, self._zoom)
+        return None
+
     def add_point(self, point):
         if not self._editable or not QRectF(self.rect()).contains(point):
             return
-        x = self._x + point.x() - self.width() / 2
-        y = self._y + point.y() - self.height() / 2
-        if not 0 <= y <= TILE_SIZE * 2 ** self._zoom:
+        location = self._map_point(point)
+        if location is None:
             return
-        position = {key: round(value, 7) for key, value in _unproject(x, y, self._zoom).items()}
+        position = {key: round(value, 7) for key, value in location.items()}
         controls = self.controls
         if controls and controls[-1] == position:
             return
         if self.shape and len(controls) == 2:
+            self._placement_history.append((controls.copy(), self.rotation))
             controls[-1] = position
         elif len(controls) < MAX_ROUTE_POINTS:
             controls.append(position)
@@ -539,13 +646,19 @@ class _MapCanvas(QWidget):
         self._draft_changed()
 
     def undo(self):
-        if self.controls:
+        if self.shape and self._placement_history:
+            self.corners, self.rotation = self._placement_history.pop()
+            self._draft_changed()
+        elif self.controls:
             self.controls.pop()
             self._draft_changed()
 
     def clear(self):
         if self.controls:
             self.controls.clear()
+            if self.shape:
+                self._placement_history.clear()
+                self.rotation = 0.0
             self._draft_changed()
 
 
@@ -561,6 +674,8 @@ class MapPreview(_MapCanvas):
         self._preview_path = None
         self._preview_geometry = None
         self._preview_fraction = 0.0
+        self.preview_rate = 1
+        self._seeking = False
         self._pixel_offset = QPointF()
         self._random = random.Random()
         self.preview_speed = 0.0
@@ -586,6 +701,29 @@ class MapPreview(_MapCanvas):
     def previewing(self):
         return self._preview_timer.isActive()
 
+    @property
+    def preview_fraction(self):
+        return self._preview_fraction
+
+    def set_preview_rate(self, rate):
+        if rate in (1, 2, 4):
+            if self.previewing and not self._seeking:
+                self._advance_preview()
+            self.preview_rate = rate
+
+    def set_seeking(self, seeking):
+        self._seeking = seeking and self.previewing
+        self._last_tick = time.monotonic()
+
+    def seek_preview(self, fraction):
+        if not self.previewing:
+            return
+        self._preview_fraction = max(0.0, min(1.0, fraction))
+        self._last_tick = time.monotonic()
+        self._pixel_offset = QPointF()
+        self.previewChanged.emit()
+        self.update()
+
     def start_preview(self, speed, length):
         if (len(self.points) < 2 or not math.isfinite(speed) or speed <= 0
                 or not math.isfinite(length) or length <= 0):
@@ -593,6 +731,7 @@ class MapPreview(_MapCanvas):
         self._target_speed = self.preview_speed = speed
         self._preview_length = length
         self._preview_fraction = 0.0
+        self._seeking = False
         self._pixel_offset = QPointF()
         self._last_tick = time.monotonic()
         self._preview_timer.start()
@@ -602,13 +741,17 @@ class MapPreview(_MapCanvas):
     def stop_preview(self):
         if self.previewing:
             self._preview_timer.stop()
+            self._preview_fraction = 0.0
+            self._seeking = False
             self._preview_path = self._preview_geometry = None
             self.previewChanged.emit()
             self.update()
 
     def _advance_preview(self):
+        if not self.previewing or self._seeking:
+            return
         now = time.monotonic()
-        elapsed = max(0.0, now - self._last_tick)
+        elapsed = self.preview_rate * max(0.0, now - self._last_tick)
         self._last_tick = now
         retain = math.exp(-elapsed / 1.2)
         weight = math.sqrt(1 - retain * retain)
@@ -641,7 +784,7 @@ class MapPicker(QDialog):
     mapStyleChanged = Signal(str)
 
     def __init__(self, parent, initial_points, on_apply, closed=False, *, load_tiles=True, style=DEFAULT_STYLE,
-                 venues=None, field_angle=None):
+                 venues=None, field_angle=None, draft_dir=None, venue_name=""):
         super().__init__(parent)
         self.setObjectName("routePicker")
         self.setWindowTitle("绘制路线")
@@ -650,6 +793,10 @@ class MapPicker(QDialog):
         self.setStyleSheet(PICKER_STYLE)
         self._on_apply = on_apply
         self._stopped = False
+        self.draft_dir = last_route_path().parent / "drafts" if draft_dir is None else draft_dir
+        self.venue_name = venue_name
+        self.draft_id = None
+        self.draft_title = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -705,12 +852,9 @@ class MapPicker(QDialog):
         tools.addWidget(self.shape_box)
         self.direction_box = ComboBox(self)
         self.direction_box.setAccessibleName("字样方向")
-        follows_track = self.canvas.field_angle is not None
-        self.direction_box.setToolTip("字样和选框一起沿参考跑道的长边旋转" if follows_track
-                                     else "当前没有可辨认长边的参考跑道，字样按选框长边排列")
-        auto_name = "沿操场长边" if follows_track else "沿选框长边"
-        for name, direction in ((auto_name, "auto"), ("横排", "horizontal"), ("竖排", "vertical")):
+        for name, direction in (("沿选框长边", "auto"), ("横排", "horizontal"), ("竖排", "vertical")):
             self.direction_box.addItem(name, direction)
+        self._update_direction_hint()
         self.direction_box.currentIndexChanged.connect(
             lambda: self.canvas.set_lettering_direction(self.direction_box.currentData()))
         tools.addWidget(self.direction_box)
@@ -719,6 +863,10 @@ class MapPicker(QDialog):
         self.smooth_box.setChecked(True)
         self.smooth_box.toggled.connect(self.canvas.set_smoothing)
         tools.addWidget(self.smooth_box)
+        self.hand_closed_box = CheckBox("闭合路线", self)
+        self.hand_closed_box.setChecked(closed)
+        self.hand_closed_box.toggled.connect(self.canvas.set_hand_closure)
+        tools.addWidget(self.hand_closed_box)
         self.reference_box = CheckBox("显示参考路线", self)
         self.reference_box.setToolTip("用灰蓝色虚线显示打开绘图前的路线")
         self.reference_box.setChecked(self.canvas.show_reference)
@@ -738,9 +886,12 @@ class MapPicker(QDialog):
         footer.addWidget(self.summary, 1)
         self.undo_button = QPushButton("撤销", self)
         self.clear_button = QPushButton("清空", self)
+        self.library_button = QPushButton("打开草稿…", self)
+        self.save_button = QPushButton("保存草稿…", self)
         self.apply_button = QPushButton("使用路线", self)
         self.apply_button.setObjectName("mapApply")
         for button, slot in (
+            (self.library_button, self.open_draft_dialog), (self.save_button, self.save_draft_dialog),
             (self.undo_button, self.canvas.undo), (self.clear_button, self.canvas.clear),
             (self.apply_button, self._apply),
         ):
@@ -763,6 +914,134 @@ class MapPicker(QDialog):
         style = self.style_box.itemData(index)
         self.canvas.set_map_style(style)
         self.mapStyleChanged.emit(style)
+
+    def _update_direction_hint(self):
+        follows_track = self.canvas.field_angle is not None
+        self.direction_box.setItemText(0, "沿操场长边" if follows_track else "沿选框长边")
+        self.direction_box.setToolTip("字样随参考跑道长边排列" if follows_track else "字样随选框长边排列")
+
+    def _draft_form(self, title, action):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        layout.addLayout(form)
+        message = QLabel(dialog)
+        message.setWordWrap(True)
+        layout.addWidget(message)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, dialog)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.rejected.connect(dialog.reject)
+        submit = buttons.addButton(action, QDialogButtonBox.ButtonRole.AcceptRole)
+        submit.setDefault(True)
+        layout.addWidget(buttons)
+        dialog.setMinimumWidth(315)
+        return dialog, form, message, submit
+
+    def save_draft_dialog(self):
+        dialog, form, message, submit = self._draft_form("保存草稿", "保存")
+        venue = QLineEdit(self.venue_name if self.draft_id else
+                          (self.comparison.selector.currentText() or self.venue_name or "自选场地"), dialog)
+        title = QLineEdit(self.draft_title or SHAPES.get(self.canvas.shape, "手绘路线"), dialog)
+        for caption, field in (("场地", venue), ("草稿名称", title)):
+            field.setMaxLength(160)
+            field.setAccessibleName(caption)
+            form.addRow(caption, field)
+        message.setText("沿用原名称会更新这份草稿。更改名称或场地可另存一份。" if self.draft_id
+                        else "可从「打开草稿」继续调整原始选点或图形。")
+
+        def save():
+            try:
+                self.store_drawing(venue.text(), title.text())
+            except (ValueError, OSError) as error:
+                message.setText(f"保存失败。{error}")
+                return
+            dialog.accept()
+
+        submit.clicked.connect(save)
+        title.selectAll()
+        dialog.open()
+        title.setFocus()
+        return dialog
+
+    def store_drawing(self, venue, title):
+        canvas = self.canvas
+        venue, title = venue.strip(), title.strip()
+        draft = DrawingDraft(title, venue, canvas.shape or "", canvas.points, canvas.corners, canvas.reference,
+                             canvas._closed_route, canvas.smoothing, canvas.show_reference, canvas.lettering_direction,
+                             canvas.field_angle, canvas.rotation, self.comparison.selector.currentText())
+        same_name = (venue, title) == (self.venue_name, self.draft_title)
+        self.draft_id = save_draft(self.draft_dir, draft, self.draft_id if same_name else None)
+        self.venue_name, self.draft_title = venue, title
+        self.setWindowTitle(f"绘制路线 · {venue} · {title}")
+        self.summary.setText(f"已保存 · {title}")
+
+    def open_draft_dialog(self):
+        dialog, form, message, submit = self._draft_form("打开草稿", "打开")
+        try:
+            catalog = draft_catalog(self.draft_dir)
+        except OSError as error:
+            catalog = []
+            message.setText(f"无法读取草稿。{error}")
+        venue, title = ComboBox(dialog), ComboBox(dialog)
+        venue.setAccessibleName("草稿场地")
+        title.setAccessibleName("已有草稿")
+        form.addRow("场地", venue)
+        form.addRow("草稿", title)
+        venue.addItems(list(dict.fromkeys(row[0] for row in catalog)))
+        venue.setCurrentText(self.venue_name)
+
+        def list_titles():
+            title.clear()
+            for field, name, identifier in catalog:
+                if field == venue.currentText():
+                    title.addItem(name, identifier)
+            index = title.findData(self.draft_id)
+            if index >= 0:
+                title.setCurrentIndex(index)
+            submit.setEnabled(title.count() > 0)
+
+        def open_selected():
+            try:
+                self.restore_drawing(title.currentData())
+            except (ValueError, OSError, OverflowError, RecursionError) as error:
+                message.setText(f"打开失败。{error}")
+                return
+            dialog.accept()
+
+        if not message.text():
+            message.setText("打开后将载入所选草稿。" if catalog else "还没有草稿。绘制后可点「保存草稿」。")
+        venue.currentIndexChanged.connect(list_titles)
+        submit.clicked.connect(open_selected)
+        list_titles()
+        dialog.open()
+        return dialog
+
+    def restore_drawing(self, identifier):
+        draft = load_draft(self.draft_dir, identifier)
+        canvas = self.canvas
+        canvas.shape, canvas.lettering_direction = draft.shape, draft.lettering_direction
+        canvas.points, canvas.corners, canvas.reference = draft.points, draft.corners, draft.reference
+        canvas._closed_route, canvas.smoothing = draft.closed, draft.smoothing
+        canvas.show_reference, canvas.field_angle, canvas.rotation = draft.show_reference, draft.field_angle, draft.rotation
+        canvas._placement_history.clear()
+        for box, value in ((self.shape_box, draft.shape), (self.direction_box, draft.lettering_direction)):
+            with QSignalBlocker(box):
+                box.setCurrentIndex(box.findData(value))
+        for box, value in ((self.smooth_box, draft.smoothing), (self.hand_closed_box, draft.closed),
+                           (self.reference_box, draft.show_reference)):
+            with QSignalBlocker(box):
+                box.setChecked(value)
+        self.reference_box.setEnabled(bool(draft.reference))
+        self._update_direction_hint()
+        self.comparison.select_route(draft.reference_venue or draft.venue)
+        self.draft_id, self.venue_name, self.draft_title = identifier, draft.venue, draft.title
+        self.setWindowTitle(f"绘制路线 · {draft.venue} · {draft.title}")
+        canvas._fit_pending = False
+        canvas._frame(canvas.controls or canvas.reference)
+        canvas._draft_changed()
+        canvas._viewport_changed()
 
     def _toggle_coordinates(self):
         if self.coordinate_panel.isVisible():
@@ -791,11 +1070,14 @@ class MapPicker(QDialog):
         self.undo_button.setEnabled(count > 0)
         self.clear_button.setEnabled(count > 0)
         self.apply_button.setEnabled(output_count >= 2)
+        self.save_button.setEnabled(count > 0)
         shape = self.canvas.shape
         self.direction_box.setVisible(shape == "ikun")
         self.smooth_box.setVisible(not shape)
+        self.hand_closed_box.setVisible(not shape)
         if shape:
-            self.hint.setText("在操场内点选区域的两个对角，可再次点选调整第二个角")
+            self.hint.setText("拖中心移动，拖角等比例缩放，拖圆柄旋转" if output_count
+                              else "点选区域的两个对角，放置图形")
             parts = ["选第一个角" if not count else "选对角"] if count < 2 else [
                 f"{SHAPES[shape]} · {output_count} 个路线点" if output_count else "请选斜对角，给选框留出长度和宽度"]
         else:
@@ -824,9 +1106,9 @@ class MapPicker(QDialog):
 
 
 def open_map_picker(parent, initial_points, on_apply, *, closed=False, load_tiles=True, style=DEFAULT_STYLE,
-                    venues=None, field_angle=None):
+                    venues=None, field_angle=None, draft_dir=None, venue_name=""):
     """Open an empty draft fitted to the current route and return the dialog."""
     dialog = MapPicker(parent, initial_points, on_apply, closed, load_tiles=load_tiles, style=style, venues=venues,
-                       field_angle=field_angle)
+                       field_angle=field_angle, draft_dir=draft_dir, venue_name=venue_name)
     dialog.open()
     return dialog

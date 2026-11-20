@@ -160,7 +160,7 @@ def _template(kind):
     return vertices + vertices[:1]
 
 
-def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None):
+def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None, rotation=0.0):
     """Return the fitted stroke and its four-corner map outline for drawing the guide."""
     if kind not in SHAPES or len(corners) != 2:
         return [], []
@@ -169,7 +169,7 @@ def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None)
         return [], []
     (x0, y0), (x1, y1) = box
     aligned = kind == "ikun" and lettering_direction == "auto" and field_angle is not None
-    angle = field_angle if aligned else 0.0
+    angle = (field_angle if aligned else 0.0) + rotation
     ux, uy = math.cos(angle), math.sin(angle)
     dx, dy = x1 - x0, y1 - y0
     width, height = abs(dx * ux + dy * uy), abs(dy * ux - dx * uy)
@@ -204,6 +204,7 @@ def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None)
     return _sample(xy, scale, closed=kind != "ikun", minimum=96), outline
 
 
-def shape_route(kind, corners, *, lettering_direction="auto", field_angle=None):
-    route, _ = shape_layout(kind, corners, lettering_direction=lettering_direction, field_angle=field_angle)
+def shape_route(kind, corners, *, lettering_direction="auto", field_angle=None, rotation=0.0):
+    route, _ = shape_layout(kind, corners, lettering_direction=lettering_direction, field_angle=field_angle,
+                            rotation=rotation)
     return route

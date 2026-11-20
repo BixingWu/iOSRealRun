@@ -2,6 +2,7 @@ import os
 import re
 import runpy
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata, get_package_paths
@@ -10,6 +11,13 @@ from PyInstaller.utils.hooks import collect_data_files, copy_metadata, get_packa
 scripts = Path(SPECPATH)
 project = scripts.parent
 version = runpy.run_path(str(project / "iosrealrun/app_version.py"))["VERSION"]
+build_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+revision = os.environ.get("IOSREALRUN_BUILD_REVISION") or os.environ.get("GITHUB_SHA", "")
+if re.fullmatch(r"[0-9a-fA-F]{7,64}", revision):
+    build_id += "-" + revision[:10].lower()
+build_hook = Path(workpath) / "iosrealrun_build_id.py"
+build_hook.write_text(f"import sys\nsys._iosrealrun_build_id = {build_id!r}\n", encoding="utf-8")
+print(f"iOSRealRun build: {build_id}", flush=True)
 route_files = ("ZJGEast.txt", "ZJGWest.txt", "YuQuan.txt", "HaiNing.txt", "XiXi.txt")
 data = [(str(project / "routes" / filename), "routes") for filename in route_files]
 data += [(str(project / "config.example.yaml"), ".")]
@@ -45,6 +53,7 @@ analysis = Analysis(
     pathex=[str(project)],
     binaries=binaries,
     datas=data,
+    runtime_hooks=[str(build_hook)],
     hiddenimports=[
         "pymobiledevice3.remote.userspace_tunnel",
         # PyInstaller's PySide6 hook checks for the optional meta-distribution.

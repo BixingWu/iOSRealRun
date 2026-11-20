@@ -1,6 +1,9 @@
+import math
 import os
 import queue
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -8,8 +11,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QColor, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QPushButton, QWidget
 
+from iosrealrun.drawing_drafts import draft_catalog, load_draft
 from iosrealrun.map_picker import MAX_ZOOM, _route_pixels
 from iosrealrun.qt_map_picker import MapPreview, open_map_picker
 
@@ -125,6 +129,107 @@ class QtMapPickerTests(unittest.TestCase):
         self.assertEqual(canvas.draft_route, lettering)
         picker.apply_button.click()
         self.assertEqual(self.results, [lettering])
+
+    def test_shape_handles_move_scale_rotate_and_undo_across_the_date_line(self):
+        picker = self.make_picker()
+        canvas = picker.canvas
+        canvas.center_on({"lat": 30, "lng": 179.9998})
+        picker.shape_box.setCurrentIndex(picker.shape_box.findData("ikun"))
+        center = QPointF(canvas.rect().center())
+        for offset in (QPointF(-54, -32), QPointF(54, 32)):
+            canvas.add_point(center + offset)
+        original = canvas.corners.copy()
+        self.assertGreater(original[0]["lng"], 0)
+        self.assertLess(original[1]["lng"], 0)
+        viewport = canvas._x, canvas._y
+
+        def drag(pos, destination):
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=pos.toPoint())
+            QTest.mouseMove(canvas, destination.toPoint())
+            QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=destination.toPoint())
+
+        handles = canvas._placement_handles()
+        move = QPointF(17, 13)
+        drag(handles["move"], handles["move"] + move)
+        self.assertEqual((canvas._x, canvas._y), viewport)
+        self.assertLess((canvas._placement_handles()["move"] - handles["move"] - move).manhattanLength(), .01)
+        shifted = canvas.corners.copy()
+        handles = canvas._placement_handles()
+        drag(handles[2], handles[0] + (handles[2] - handles[0]) * 1.5)
+        scaled = canvas._placement_handles()
+        self.assertLess((scaled[0] - handles[0]).manhattanLength(), .01)
+        for edge in (1, 3):
+            ratio = (scaled[edge] - scaled[0]).manhattanLength() / (handles[edge] - handles[0]).manhattanLength()
+            self.assertAlmostEqual(ratio, 1.5, places=2)
+        before_rotate = canvas.corners.copy()
+        arm = scaled["rotate"] - scaled["move"]
+        drag(scaled["rotate"], scaled["move"] + QPointF(-arm.y(), arm.x()))
+        rotated = canvas._placement_handles()
+        self.assertAlmostEqual(canvas.rotation, math.pi / 2, places=2)
+        self.assertLess((rotated["move"] - scaled["move"]).manhattanLength(), .01)
+        for edge in (1, 3):
+            before, after = scaled[edge] - scaled[0], rotated[edge] - rotated[0]
+            self.assertAlmostEqual(math.hypot(*before.toTuple()), math.hypot(*after.toTuple()), places=4)
+        for corners in (before_rotate, shifted, original):
+            picker.undo_button.click()
+            self.assertEqual(canvas.corners, corners)
+        self.assertEqual(canvas.rotation, 0)
+        picker.reject()
+
+    def test_draft_dialogs_reopen_original_anchors_and_template_in_a_new_editor(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            picker = self.make_picker()
+            picker.draft_dir = directory
+            canvas = picker.canvas
+            center = QPointF(canvas.rect().center())
+            canvas.add_point(center)
+            picker.hand_closed_box.click()
+            picker.smooth_box.click()
+            picker.shape_box.setCurrentIndex(picker.shape_box.findData("ikun"))
+            picker.direction_box.setCurrentIndex(picker.direction_box.findData("vertical"))
+            canvas.add_point(center - QPointF(80, 35))
+            canvas.add_point(center + QPointF(80, 35))
+            canvas.rotation = .31
+            canvas._draft_changed()
+            picker.reference_box.click()
+            expected = canvas.points.copy(), canvas.corners.copy(), canvas.draft_route.copy(), canvas.reference.copy()
+            save = picker.save_draft_dialog()
+            for field in save.findChildren(QLineEdit):
+                field.setText("操场 A" if field.accessibleName() == "场地" else "字样草图")
+            next(b for b in save.findChildren(QPushButton) if b.text() == "保存").click()
+            identifier = picker.draft_id
+            picker.store_drawing("操场 A", "字样草图")
+            self.assertEqual(picker.draft_id, identifier)
+            picker.store_drawing("操场 A", "另一份")
+            picker.store_drawing("操场 B", "字样草图")
+            self.assertEqual(len(draft_catalog(directory)), 3)
+            picker.reject()
+
+            fresh = self.make_picker()
+            fresh.draft_dir = directory
+            library = fresh.open_draft_dialog()
+            boxes = {box.accessibleName(): box for box in library.findChildren(QComboBox)}
+            boxes["草稿场地"].setCurrentText("操场 A")
+            boxes["已有草稿"].setCurrentIndex(boxes["已有草稿"].findData(identifier))
+            next(b for b in library.findChildren(QPushButton) if b.text() == "打开").click()
+            self.assertEqual(fresh.draft_id, identifier)
+            self.assertEqual(fresh.direction_box.currentData(), "vertical")
+            self.assertFalse(fresh.reference_box.isChecked())
+            self.assertEqual(fresh.canvas.rotation, .31)
+            self.assertEqual((fresh.canvas.points, fresh.canvas.corners, fresh.canvas.draft_route, fresh.canvas.reference),
+                             expected)
+            fresh.shape_box.setCurrentIndex(0)
+            self.assertTrue(fresh.hand_closed_box.isChecked())
+            self.assertFalse(fresh.smooth_box.isChecked())
+            self.assertEqual(fresh.canvas.controls, expected[0])
+            fresh.store_drawing("操场 A", "单点手绘")
+            self.assertEqual(load_draft(directory, fresh.draft_id).points, expected[0])
+            (directory / ("a" * 32 + ".json")).write_text("{}", encoding="utf-8")
+            self.assertEqual(len(draft_catalog(directory)), 4)
+            with self.assertRaises(ValueError):
+                fresh.restore_drawing("../outside")
+            fresh.reject()
 
     def test_location_input_validates_coordinates_and_keeps_draft(self):
         picker = self.make_picker()

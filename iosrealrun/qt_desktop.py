@@ -2,11 +2,12 @@
 
 import argparse
 import asyncio
+import re
 import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QEvent, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QEvent, QPointF, QRectF, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QDesktopServices, QFont, QIcon, QKeySequence, QLinearGradient,
     QPainter, QPainterPath, QPen, QPixmap, QShortcut,
@@ -14,10 +15,10 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialog, QFileDialog, QFrame,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
-from iosrealrun.app_version import VERSION
+from iosrealrun.app_version import BUILD_ID, VERSION
 from iosrealrun.config import DEFAULT_LAPS, DEFAULT_SPEED, read_settings
 from iosrealrun.desktop_device import connect_device, list_devices, replay_route, reset_location, reveal_developer_mode
 from iosrealrun.desktop_routes import (
@@ -51,6 +52,7 @@ QLabel[role="section"] { color: #4a5b71; font-size: 13px; font-weight: 600; }
 QLabel[role="previewTitle"] { font-size: 24px; font-weight: 550; }
 QLabel[role="muted"] { color: #53647a; font-size: 12px; }
 QLabel[role="field"] { color: #354357; font-size: 12px; font-weight: 550; }
+QLabel[role="totalDistance"] { color: #264a72; font-size: 16px; font-weight: 600; }
 QLabel[role="value"] { color: #181e2a; font-size: 21px; font-weight: 600; }
 QLabel[error="true"] { color: #a22630; }
 QFrame[card="true"] { background: rgba(255, 255, 255, 238); border: 1px solid #e1e8f3; border-radius: 22px; }
@@ -93,9 +95,32 @@ QCheckBox::indicator:checked { background: #0874e8; border-color: #0874e8; }
 QCheckBox::indicator:disabled { background: #e1e8f3; border-color: #dae4f1; }
 QProgressBar { background: #eaf0f7; border: 0; border-radius: 2px; min-height: 4px; max-height: 4px; }
 QProgressBar::chunk { background: #0874e8; border-radius: 2px; }
+QSlider::groove:horizontal { height: 4px; border-radius: 2px; background: #e1eaf6; }
+QSlider::sub-page:horizontal { background: #0874e8; border-radius: 2px; }
+QSlider::handle:horizontal { background: white; border: 2px solid #0874e8; width: 12px;
+                             margin: -6px 0; border-radius: 8px; }
 QDialog { background: #f3f7fc; }
 QPlainTextEdit { padding: 10px; }
 """
+
+
+def pace_for_speed(value):
+    speed = float(value)
+    if not 0.1 <= speed <= 30:
+        raise ValueError
+    minutes, seconds = divmod(round(1000 / speed), 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+def speed_for_pace(value):
+    value = value.strip().lower().replace("：", ":")
+    match = re.fullmatch(r"(\d{1,3}):?([0-5]\d)(?:\s*/\s*km)?", value)
+    if not match:
+        raise ValueError
+    seconds = int(match[1]) * 60 + int(match[2])
+    if not seconds or not 0.1 <= 1000 / seconds <= 30:
+        raise ValueError
+    return 1000 / seconds
 
 
 def label(text, role=None, *, wrap=False):
@@ -217,7 +242,7 @@ class BackgroundEvents(QObject):
 
 
 class Desktop(QMainWindow):
-    def __init__(self, *, discover=True, load_tiles=None):
+    def __init__(self, *, discover=True, load_tiles=None, draft_dir=None):
         super().__init__()
         self.setWindowTitle("iOSRealRun")
         self.setWindowIcon(icon("brand", size=32))
@@ -228,6 +253,8 @@ class Desktop(QMainWindow):
         self.display_points = []
         self.route_name = ""
         self.drawing_field_angle = None
+        self.draft_dir = draft_dir
+        self._pace_edited = False
         self.distance = 0.0
         self.busy = None
         self.scanning = False
@@ -318,8 +345,10 @@ class Desktop(QMainWindow):
 
         self.import_shortcut = QShortcut(QKeySequence.StandardKey.Open, self)
         self.import_shortcut.activated.connect(self.browse_route)
-        for field in (self.speed, self.laps):
-            field.textChanged.connect(self.parameters_changed)
+        self.speed.textChanged.connect(self.speed_changed)
+        self.pace.textChanged.connect(self.pace_changed)
+        self.pace.editingFinished.connect(self.format_pace)
+        self.laps.textChanged.connect(self.parameters_changed)
 
     def eventFilter(self, widget, event):
         if event.type() == QEvent.Type.FocusIn:
@@ -385,11 +414,19 @@ class Desktop(QMainWindow):
         parameters.setVerticalSpacing(5)
         self.speed = QLineEdit(objectName="number")
         self.speed.setAccessibleName("速度（米/秒）")
+        self.pace = QLineEdit(objectName="number")
+        self.pace.setAccessibleName("配速（分/公里）")
+        self.pace.setPlaceholderText("3:20")
+        self.pace.setToolTip("可输入 3:20、320 或 3:20/km")
         self.laps = QLineEdit(objectName="number")
         self.laps.setAccessibleName("圈数")
-        for column, (description, field) in enumerate((("速度 · 米/秒", self.speed), ("圈数", self.laps))):
-            parameters.addWidget(label(description, "field"), 0, column)
-            parameters.addWidget(field, 1, column)
+        self.total_distance_text = label("—", "totalDistance")
+        self.total_distance_text.setAccessibleName("总里程")
+        for index, (description, field) in enumerate((("速度 · 米/秒", self.speed), ("配速 · 分/公里", self.pace),
+                                                      ("圈数", self.laps), ("总里程", self.total_distance_text))):
+            row, column = divmod(index, 2)
+            parameters.addWidget(label(description, "field"), row * 2, column)
+            parameters.addWidget(field, row * 2 + 1, column)
             parameters.setColumnStretch(column, 1)
         layout.addLayout(parameters)
 
@@ -463,6 +500,30 @@ class Desktop(QMainWindow):
         layout.addLayout(toolbar)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout.addWidget(self.comparison, 1)
+        self.preview_controls = QWidget()
+        playback = QHBoxLayout(self.preview_controls)
+        playback.setContentsMargins(2, 0, 2, 0)
+        self.preview_slider = QSlider(Qt.Orientation.Horizontal)
+        self.preview_slider.setRange(0, 1000)
+        self.preview_slider.setPageStep(100)
+        self.preview_slider.setAccessibleName("本地预演进度")
+        self.preview_slider.sliderPressed.connect(lambda: self.canvas.set_seeking(True))
+        self.preview_slider.sliderReleased.connect(lambda: self.canvas.set_seeking(False))
+        self.preview_slider.valueChanged.connect(lambda value: self.canvas.seek_preview(value / 1000))
+        self.preview_percent = label("0%", "muted")
+        self.preview_percent.setMinimumWidth(self.preview_percent.fontMetrics().horizontalAdvance("100%") + 4)
+        self.preview_rate_box = ComboBox()
+        self.preview_rate_box.setAccessibleName("本地预演倍速")
+        self.preview_rate_box.setToolTip("本地预演播放速度")
+        for factor in (1, 2, 4):
+            self.preview_rate_box.addItem(f"{factor}×", factor)
+        self.preview_rate_box.currentIndexChanged.connect(
+            lambda: self.canvas.set_preview_rate(self.preview_rate_box.currentData()))
+        playback.addWidget(self.preview_slider, 1)
+        playback.addWidget(self.preview_percent)
+        playback.addWidget(self.preview_rate_box)
+        self.preview_controls.hide()
+        layout.addWidget(self.preview_controls)
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setRange(0, 1000)
@@ -504,6 +565,10 @@ class Desktop(QMainWindow):
     def update_local_preview(self):
         playing = self.canvas.previewing
         self.preview_button.setText("结束预演" if playing else "本地预演")
+        self.preview_controls.setVisible(playing)
+        with QSignalBlocker(self.preview_slider):
+            self.preview_slider.setValue(round(self.canvas.preview_fraction * 1000))
+        self.preview_percent.setText(f"{self.canvas.preview_fraction:.0%}")
         if playing:
             self.map_state.setText(f"本地预演 · {self.canvas.preview_speed:.2f} 米/秒")
         elif not self.busy:
@@ -537,7 +602,22 @@ class Desktop(QMainWindow):
         set_property(self.status_label, "error", error)
 
     def open_help(self):
-        QDesktopServices.openUrl(QUrl("https://github.com/BixingWu/iOSRealRun#使用方法"))
+        dialog = QDialog(self)
+        dialog.setWindowTitle("使用帮助")
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.addWidget(label(f"iOSRealRun {VERSION}", "previewTitle"))
+        build = label(f"构建编号  {BUILD_ID}" if BUILD_ID else "运行方式  源码运行", "muted")
+        build.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(build)
+        actions = QHBoxLayout()
+        actions.addWidget(button("打开使用手册", lambda: QDesktopServices.openUrl(
+            QUrl("https://github.com/BixingWu/iOSRealRun#使用方法")), role="map"))
+        actions.addWidget(button("关闭", dialog.accept))
+        layout.addLayout(actions)
+        dialog.open()
+        return dialog
 
     def open_driver_help(self):
         QDesktopServices.openUrl(QUrl("https://support.apple.com/118290"))
@@ -647,13 +727,14 @@ class Desktop(QMainWindow):
             reference = reference + reference[:1]
 
         def apply(points):
-            name = SHAPES.get(dialog.canvas.shape, "地图路线")
+            name = dialog.draft_title or SHAPES.get(dialog.canvas.shape, "地图路线")
             self.set_route(points, name, "wgs84", dialog.canvas.route_closed, field_angle=dialog.canvas.field_angle)
             self.comparison.copy_view(dialog.comparison)
 
         dialog = open_map_picker(self, reference, apply,
                                  style=self.map_style_box.currentData(), load_tiles=self.load_tiles,
-                                 venues=self.comparison.entries.values(), field_angle=self.drawing_field_angle)
+                                 venues=self.comparison.entries.values(), field_angle=self.drawing_field_angle,
+                                 draft_dir=self.draft_dir, venue_name=self.route_name)
         dialog.comparison.copy_view(self.comparison)
         dialog.mapStyleChanged.connect(
             lambda style: self.map_style_box.setCurrentIndex(self.map_style_box.findData(style)))
@@ -790,8 +871,37 @@ class Desktop(QMainWindow):
         self.canvas.set_route(self.display_points, self.closed.isChecked())
         self.parameters_changed()
 
+    def speed_changed(self, value):
+        self._pace_edited = False
+        try:
+            pace = pace_for_speed(value)
+        except (ValueError, OverflowError):
+            pace = ""
+        with QSignalBlocker(self.pace):
+            self.pace.setText(pace)
+        self.parameters_changed()
+
+    def pace_changed(self, value):
+        self._pace_edited = True
+        try:
+            speed = format(speed_for_pace(value), ".12g")
+        except (ValueError, OverflowError):
+            speed = ""
+        with QSignalBlocker(self.speed):
+            self.speed.setText(speed)
+        self.parameters_changed()
+
+    def format_pace(self):
+        if self._pace_edited and self.speed.text():
+            with QSignalBlocker(self.pace):
+                self.pace.setText(pace_for_speed(self.speed.text()))
+
     def validate_parameters(self):
         error = ""
+        invalid_pace = self._pace_edited and not self.speed.text()
+        set_property(self.pace, "error", invalid_pace)
+        if invalid_pace:
+            error = "请输入有效配速，如 3:20/km。速度范围为 0.1–30 米/秒。"
         for widget, value, convert, low, high, message in (
             (self.speed, self.speed.text(), float, 0.1, 30, "速度范围为 0.1–30 米/秒。"),
             (self.laps, self.laps.text() if self.closed.isChecked() else "1", int, 0, 999, "圈数需为 0–999 的整数。"),
@@ -800,7 +910,7 @@ class Desktop(QMainWindow):
                 valid = low <= convert(value) <= high
             except (ValueError, OverflowError):
                 valid = False
-            set_property(widget, "error", not valid)
+            set_property(widget, "error", not valid and not (widget is self.speed and invalid_pace))
             if not valid and not error:
                 error = message
         try:
@@ -819,8 +929,7 @@ class Desktop(QMainWindow):
             speed = float(self.speed.text())
             if not 0.1 <= speed <= 30:
                 raise ValueError
-            pace = round(1000 / speed)
-            self.pace_text.setText(f"{pace // 60}:{pace % 60:02d} /km")
+            self.pace_text.setText(f"{pace_for_speed(speed)} /km")
         except (ValueError, OverflowError):
             speed = None
             self.pace_text.setText("—")
@@ -836,6 +945,14 @@ class Desktop(QMainWindow):
         else:
             self.distance_text.setText("—")
         self.distance_caption.setText("单圈距离" if self.closed.isChecked() else "路线距离")
+        total = "—"
+        if self.distance > 0 and laps is not None:
+            if laps == 0:
+                total = "持续循环"
+            else:
+                metres = self.distance * laps
+                total = f"{metres:.0f} m" if metres < 1000 else f"{metres / 1000:.2f}".rstrip("0").rstrip(".") + " km"
+        self.total_distance_text.setText(total)
         if laps == 0 and speed and self.distance:
             duration = "持续"
         elif laps and speed and self.distance:
@@ -855,7 +972,7 @@ class Desktop(QMainWindow):
         self.refresh_button.setEnabled(idle and not self.scanning)
         self.device_action.setEnabled(idle and not self.scanning)
         self.device_box.setEnabled(idle and bool(self.devices))
-        for control in (self.route_box, self.system_box, self.speed, self.import_button,
+        for control in (self.route_box, self.system_box, self.speed, self.pace, self.import_button,
                         self.paste_button, self.map_button, self.closed, self.advanced_button):
             control.setEnabled(idle)
         self.laps.setEnabled(idle and self.closed.isChecked())
@@ -1035,6 +1152,8 @@ def self_test(window):
 
     if UserspaceRsdTunnel is None:
         raise RuntimeError("Cannot import the device tunnel.")
+    if getattr(sys, "frozen", False) and not BUILD_ID:
+        raise RuntimeError("The portable build identifier is missing.")
     if decode(b""):
         raise RuntimeError("Expected an empty vector tile to have no map layers.")
     for path in ROUTES.values():
@@ -1048,6 +1167,10 @@ def self_test(window):
     window.preview_button.click()
     if not window.canvas.previewing or window.canvas.marker is not None:
         raise RuntimeError("The local map preview did not start independently of the device.")
+    window.preview_rate_box.setCurrentIndex(window.preview_rate_box.findData(4))
+    window.preview_slider.setValue(500)
+    if window.canvas.preview_rate != 4 or window.canvas.preview_fraction != .5:
+        raise RuntimeError("The local preview playback controls did not take effect.")
     window.preview_button.click()
     window.receive("scan", True, [Device("self-test", "iPhone", "15.6")])
     if not window.start_button.isEnabled() or not window.reset_button.isVisible() or window.device_action.isVisible():
