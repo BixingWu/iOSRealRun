@@ -113,7 +113,8 @@ class RouteDrawingTests(unittest.TestCase):
         self.assertLess(max(geodistance(a, b) for a, b in pairwise(gem)), 3.05)
         self.assertGreater(geodistance(gem[0], gem[-1]), 50)
 
-    def test_beamed_notes_keep_their_proportions_in_wide_and_tall_boxes(self):
+    def test_old_note_drafts_keep_their_proportions_in_wide_and_tall_boxes(self):
+        self.assertNotIn("notes", SHAPES)
         for width, height in ((280, 90), (90, 280)):
             corners = [self.track_point(-width, -height, 0), self.track_point(width, height, 0)]
             notes = shape_route("notes", corners)

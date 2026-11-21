@@ -8,9 +8,11 @@ from iosrealrun.map_picker import TILE_SIZE, _project, _unproject, _wrapped_delt
 
 
 SHAPES = {
-    "ikun": "连笔 IKUN", "gem": "G.E.M.（解解）", "notes": "双音符",
+    "ikun": "连笔 IKUN", "gem": "G.E.M.（解解）",
     "heart": "爱心", "eight": "无限符号 ∞", "oval": "椭圆",
 }
+# Keep retired geometry available when reopening a draft from its saved placement handles.
+DRAFT_SHAPES = {*SHAPES, "notes"}
 POINT_SPACING_M = 3
 EARTH_CIRCUMFERENCE = 2 * math.pi * 6_371_008.8
 
@@ -190,7 +192,7 @@ def _template(kind):
 
 def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None, rotation=0.0):
     """Return the fitted stroke and its four-corner map outline for drawing the guide."""
-    if kind not in SHAPES or len(corners) != 2:
+    if kind not in DRAFT_SHAPES or len(corners) != 2:
         return [], []
     box = _project_line(corners)
     if len(box) != 2:

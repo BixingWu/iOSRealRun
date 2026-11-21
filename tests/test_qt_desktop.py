@@ -182,7 +182,7 @@ class DesktopUITests(unittest.TestCase):
         window = self.make_window()
         self.assertEqual(window.map_style_box.currentData(), "city")
         for kind, title, closed in (("ikun", "连笔 IKUN", False), ("gem", "G.E.M.（解解）", False),
-                                    ("notes", "双音符", True), ("heart", "爱心", True)):
+                                    ("heart", "爱心", True)):
             picker = window.pick_route()
             self.application.processEvents()
             picker.shape_box.setCurrentIndex(picker.shape_box.findData(kind))

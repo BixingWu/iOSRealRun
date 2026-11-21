@@ -884,6 +884,7 @@ class MapPicker(QDialog):
         self.shape_box.addItem("手绘选点", "")
         for kind, name in SHAPES.items():
             self.shape_box.addItem(name, kind)
+        self.shape_box.setPlaceholderText("草稿图形")
         self.shape_box.currentIndexChanged.connect(lambda: self.canvas.select_shape(self.shape_box.currentData()))
         tools.addWidget(self.shape_box)
         self.direction_box = ComboBox(self)
@@ -1114,8 +1115,9 @@ class MapPicker(QDialog):
         if shape:
             self.hint.setText("拖中心移动，拖角等比例缩放，拖圆柄旋转" if output_count
                               else "点选区域的两个对角，放置图形")
+            name = SHAPES.get(shape, self.shape_box.placeholderText())
             parts = ["选第一个角" if not count else "选对角"] if count < 2 else [
-                f"{SHAPES[shape]} · {output_count} 个路线点" if output_count else "请选斜对角，给选框留出长度和宽度"]
+                f"{name} · {output_count} 个路线点" if output_count else "请选斜对角，给选框留出长度和宽度"]
         else:
             self.hint.setText("点击选点，拖动平移，滚轮缩放")
             if self.canvas.smoothing and count >= 3:

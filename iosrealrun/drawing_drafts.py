@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 
 from iosrealrun.desktop_routes import MAX_ROUTE_BYTES, MAX_ROUTE_POINTS, _normalize_points, write_route_json
-from iosrealrun.route_drawing import SHAPES
+from iosrealrun.route_drawing import DRAFT_SHAPES
 
 
 MAX_DRAFT_BYTES = 4 * MAX_ROUTE_BYTES
@@ -42,7 +42,7 @@ class DrawingDraft:
             if not isinstance(value, str) or len(value) > 160 or (not value.strip() and name != "reference_venue"):
                 raise ValueError("请输入场地和草稿名称，最长 160 字。")
             setattr(draft, name, value.strip())
-        if draft.shape not in ("", *SHAPES) or draft.lettering_direction not in ("auto", "horizontal", "vertical"):
+        if draft.shape not in ("", *DRAFT_SHAPES) or draft.lettering_direction not in ("auto", "horizontal", "vertical"):
             raise ValueError("草稿的绘制方式无效。")
         if any(type(flag) is not bool for flag in (draft.closed, draft.smoothing, draft.show_reference)):
             raise ValueError("草稿的绘制选项无效。")

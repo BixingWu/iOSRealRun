@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import queue
@@ -69,6 +70,33 @@ class QtMapPickerTests(unittest.TestCase):
         self.assertEqual(len(self.results), 1)
         self.assertEqual(len(self.results[0]), 2)
         self.assertTrue(all(30.2 < point["lat"] < 30.4 for point in self.results[0]))
+
+    def test_retired_shape_reopens_without_becoming_a_picker_choice(self):
+        picker = self.make_picker()
+        self.assertEqual(picker.shape_box.currentText(), "手绘选点")
+        self.assertEqual(picker.shape_box.findData("notes"), -1)
+        corners = [{"lat": 30.26, "lng": 120.12}, {"lat": 30.261, "lng": 120.121}]
+        with tempfile.TemporaryDirectory() as directory:
+            picker.draft_dir = Path(directory)
+            identifier = "a" * 32
+            old = dict(format=1, title="以前的草稿", venue="操场", shape="notes", corners=corners, points=[],
+                       reference=[], closed=False, smoothing=True, show_reference=False, lettering_direction="auto",
+                       field_angle=None, rotation=.3)
+            (picker.draft_dir / f"{identifier}.json").write_text(json.dumps(old), encoding="utf-8")
+            picker.restore_drawing(identifier)
+            self.assertEqual(picker.shape_box.currentIndex(), -1)
+            self.assertIn(picker.shape_box.placeholderText(), picker.summary.text())
+            self.assertEqual(picker.canvas.corners, corners)
+            self.assertTrue(picker.canvas.route_closed)
+            saved_route = picker.canvas.draft_route.copy()
+            self.assertGreaterEqual(len(saved_route), 96)
+            picker.store_drawing(old["venue"], old["title"])
+            picker.shape_box.setCurrentIndex(picker.shape_box.findData("gem"))
+            self.assertFalse(picker.canvas.route_closed)
+            picker.restore_drawing(identifier)
+            self.assertEqual(picker.shape_box.findData("notes"), -1)
+            picker.apply_button.click()
+            self.assertEqual(self.results, [saved_route])
 
     def test_drag_does_not_add_a_point_while_undo_and_clear_update_actions(self):
         picker = self.make_picker()
