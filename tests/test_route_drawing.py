@@ -88,7 +88,7 @@ class RouteDrawingTests(unittest.TestCase):
                     self.assertTrue(all(a["lat"] < p["lat"] < b["lat"] and
                                         a["lng"] < p["lng"] < b["lng"] for p in route))
                     distance = geodistance(route[0], route[-1])
-                    if kind == "ikun":
+                    if kind in ("ikun", "gem"):
                         self.assertGreater(distance, 10)
                     else:
                         self.assertLess(distance, 3.1)
@@ -101,6 +101,26 @@ class RouteDrawingTests(unittest.TestCase):
         route = shape_route("eight", corners)
         self.assertTrue(route)
         self.assertTrue(all(math.isfinite(p["lat"]) and abs(p["lng"]) > 179.9995 for p in route))
+
+    def test_gem_is_one_open_stroke_in_the_tracks_frame(self):
+        angle = math.radians(70)
+        corners = [self.track_point(-240, -75, angle), self.track_point(240, 75, angle)]
+        gem, frame = shape_layout("gem", corners, field_angle=angle)
+        ikun, expected_frame = shape_layout("ikun", corners, field_angle=angle)
+        self.assertEqual(frame, expected_frame)
+        self.assertNotEqual(gem, ikun)
+        self.assertNotEqual(gem, shape_route("gem", corners, lettering_direction="horizontal", field_angle=angle))
+        self.assertLess(max(geodistance(a, b) for a, b in pairwise(gem)), 3.05)
+        self.assertGreater(geodistance(gem[0], gem[-1]), 50)
+
+    def test_beamed_notes_keep_their_proportions_in_wide_and_tall_boxes(self):
+        for width, height in ((280, 90), (90, 280)):
+            corners = [self.track_point(-width, -height, 0), self.track_point(width, height, 0)]
+            notes = shape_route("notes", corners)
+            xs, ys = zip(*(_project(point, 19) for point in notes))
+            aspect = (max(xs) - min(xs)) / (max(ys) - min(ys))
+            self.assertTrue(1.1 < aspect < 1.25, aspect)
+            self.assertLess(max(geodistance(a, b) for a, b in pairwise(notes + notes[:1])), 3.05)
 
     def test_large_letters_fill_the_box_and_allow_explicit_orientation(self):
         box = [{"lat": 30, "lng": 120}, {"lat": 30.0015, "lng": 120.001}]

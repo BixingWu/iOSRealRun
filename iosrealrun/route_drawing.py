@@ -7,7 +7,10 @@ from iosrealrun.desktop_routes import MAX_ROUTE_POINTS
 from iosrealrun.map_picker import TILE_SIZE, _project, _unproject, _wrapped_delta
 
 
-SHAPES = {"ikun": "连笔 IKUN", "heart": "爱心", "eight": "无限符号 ∞", "oval": "椭圆"}
+SHAPES = {
+    "ikun": "连笔 IKUN", "gem": "G.E.M.（解解）", "notes": "双音符",
+    "heart": "爱心", "eight": "无限符号 ∞", "oval": "椭圆",
+}
 POINT_SPACING_M = 3
 EARTH_CIRCUMFERENCE = 2 * math.pi * 6_371_008.8
 
@@ -142,10 +145,35 @@ IKUN_STROKE = (
     (2.70, .06), (2.75, .05), (3.12, .87), (3.16, .88), (3.40, .05), (3.49, .02),
 )
 
+# Retrace the bars of G and E and loop the pen at the baseline for each full stop.
+GEM_STROKE = (
+    (.87, .25), (.78, .13), (.61, .06), (.42, .06), (.24, .13), (.11, .27),
+    (.05, .46), (.05, .63), (.11, .78), (.24, .89), (.42, .94), (.62, .93),
+    (.78, .85), (.86, .76), (.89, .53), (.55, .53), (.89, .53), (.86, .76), (.84, .93),
+    (1.03, .93), (1.09, .88), (1.06, .81), (.99, .83), (.98, .89), (1.03, .93),
+    (1.25, .93), (1.38, .07), (2.03, .07), (1.38, .07), (1.32, .47),
+    (1.86, .47), (1.32, .47), (1.25, .93), (1.99, .93),
+    (2.14, .93), (2.20, .88), (2.17, .81), (2.10, .83), (2.09, .89), (2.14, .93),
+    (2.36, .93), (2.49, .07), (2.84, .65), (3.36, .07), (3.23, .93),
+    (3.44, .93), (3.50, .88), (3.47, .81), (3.40, .83), (3.39, .89), (3.44, .93),
+)
+LETTERING_STROKES = {"ikun": IKUN_STROKE, "gem": GEM_STROKE}
+
+# Follow the outside of both noteheads, their stems and their shared beam in one lap.
+BEAMED_NOTES_OUTLINE = (
+    (.32, .23), (1.19, .04), (1.19, .68), (1.17, .75), (1.09, .82), (.98, .85),
+    (.89, .84), (.83, .80), (.82, .74), (.86, .69), (.93, .65), (1.02, .62),
+    (1.09, .62), (1.09, .24), (.42, .39), (.42, .85), (.39, .93), (.31, .99),
+    (.20, 1.02), (.10, 1.01), (.05, .97), (.04, .91), (.08, .85), (.16, .80),
+    (.24, .77), (.32, .77),
+)
+
 
 def _template(kind):
-    if kind == "ikun":
-        return _round_corners(IKUN_STROKE, .035, False)
+    if kind in LETTERING_STROKES:
+        return _round_corners(LETTERING_STROKES[kind], .035, False)
+    if kind == "notes":
+        return _round_corners(BEAMED_NOTES_OUTLINE, .035, True)
     vertices = []
     for i in range(96):
         t = math.tau * i / 96
@@ -168,7 +196,8 @@ def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None,
     if len(box) != 2:
         return [], []
     (x0, y0), (x1, y1) = box
-    aligned = kind == "ikun" and lettering_direction == "auto" and field_angle is not None
+    lettering = kind in LETTERING_STROKES
+    aligned = lettering and lettering_direction == "auto" and field_angle is not None
     angle = (field_angle if aligned else 0.0) + rotation
     ux, uy = math.cos(angle), math.sin(angle)
     dx, dy = x1 - x0, y1 - y0
@@ -185,23 +214,23 @@ def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None,
         return [], outline
     vertices = _template(kind)
     upright = height > width and not aligned
-    if kind == "ikun" and lettering_direction != "auto":
+    if lettering and lettering_direction != "auto":
         upright = lettering_direction == "vertical"
-    if upright and kind in ("ikun", "eight"):
+    if upright and (lettering or kind == "eight"):
         vertices = [(-y, x) for x, y in vertices]
     xs, ys = zip(*vertices)
     left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
     sx, sy = .92 * width / (right - left), .92 * height / (bottom - top)
-    if kind == "ikun":
+    if lettering:
         # Use both dimensions of the selected box. Limit distortion in very thin boxes.
         sx = .97 * width / (right - left)
         sy = .97 * height / (bottom - top)
         sx, sy = min(sx, 3.5 * sy), min(sy, 3.5 * sx)
-    elif kind == "heart":
+    elif kind in ("heart", "notes"):
         sx = sy = min(sx, sy)
     xy = [place((x - (left + right) / 2) * sx, (y - (top + bottom) / 2) * sy)
           for x, y in vertices]
-    return _sample(xy, scale, closed=kind != "ikun", minimum=96), outline
+    return _sample(xy, scale, closed=not lettering, minimum=96), outline
 
 
 def shape_route(kind, corners, *, lettering_direction="auto", field_angle=None, rotation=0.0):

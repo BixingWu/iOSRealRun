@@ -181,10 +181,12 @@ class DesktopUITests(unittest.TestCase):
     def test_drawing_templates_apply_to_the_desktop_with_their_closure(self):
         window = self.make_window()
         self.assertEqual(window.map_style_box.currentData(), "city")
-        for kind, title, closed in (("ikun", "连笔 IKUN", False), ("heart", "爱心", True)):
+        for kind, title, closed in (("ikun", "连笔 IKUN", False), ("gem", "G.E.M.（解解）", False),
+                                    ("notes", "双音符", True), ("heart", "爱心", True)):
             picker = window.pick_route()
             self.application.processEvents()
             picker.shape_box.setCurrentIndex(picker.shape_box.findData(kind))
+            self.assertEqual(picker.direction_box.isVisible(), not closed)
             center = QPointF(picker.canvas.rect().center())
             picker.canvas.add_point(center - QPointF(90, 42))
             picker.canvas.add_point(center + QPointF(90, 42))

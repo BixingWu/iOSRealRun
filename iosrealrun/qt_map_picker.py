@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 from iosrealrun.desktop_routes import MAX_ROUTE_POINTS, last_route_path
 from iosrealrun.drawing_drafts import DrawingDraft, draft_catalog, load_draft, save_draft
 from iosrealrun.qt_controls import CheckBox, ComboBox
-from iosrealrun.route_drawing import SHAPES, shape_layout, smooth_route, track_angle
+from iosrealrun.route_drawing import LETTERING_STROKES, SHAPES, shape_layout, smooth_route, track_angle
 from iosrealrun.venue_overlay import VenueOverlay
 from iosrealrun.map_picker import (
     MAX_ZOOM,
@@ -281,7 +281,7 @@ class _MapCanvas(QWidget):
 
     @property
     def route_closed(self):
-        return self.shape != "ikun" if self.shape else self._closed_route
+        return self.shape not in LETTERING_STROKES if self.shape else self._closed_route
 
     def select_shape(self, shape):
         self.shape = shape
@@ -1108,7 +1108,7 @@ class MapPicker(QDialog):
         self.apply_button.setEnabled(output_count >= 2)
         self.save_button.setEnabled(count > 0)
         shape = self.canvas.shape
-        self.direction_box.setVisible(shape == "ikun")
+        self.direction_box.setVisible(shape in LETTERING_STROKES)
         self.smooth_box.setVisible(not shape)
         self.hand_closed_box.setVisible(not shape)
         if shape:
