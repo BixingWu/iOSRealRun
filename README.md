@@ -2,21 +2,25 @@
 
 通过 USB 在 iPhone 或 iPad 上按指定路线模拟定位，兼容 **iOS 26、27**，并提供 **iOS 14–16** 的桌面连接方式。支持地图绘制、TXT / JSON / GPX 导入、速度与圈数设置，以及暂停、继续和恢复定位。
 
-![iOSRealRun 桌面界面](docs/images/desktop.png)
+![紫金港东操场的路线和橙色模拟位置标记](docs/images/desktop.png)
+
+绘制与回放默认使用「城市街图」，可切换清爽、街道、夜色、经典街图或纯轨迹。手绘支持平滑补点，也可以在地图上放置连笔 IKUN、G.E.M.（解解）、爱心、无限符号或椭圆。上图使用内置路线和演示位置。
+
+「本地预演」可以拖动进度条，也可以用 2× 或 4× 在电脑上走一遍路线。有本地场地数据时，主窗口和绘制窗口会在底图上叠加红色参考范围，随平移和缩放同步。点「场地范围」可选择场地或重新对齐地标。两款连笔字样默认沿所选操场的长边排布。放好图形后可以直接拖动、缩放或旋转，也可以按场地保存多条可继续编辑的草稿。
 
 ## 下载
 
-**[下载桌面版 v0.2.0-beta.4](https://github.com/BixingWu/iOSRealRun/releases/tag/v0.2.0-beta.4)**
+**[下载桌面版 v0.2.0-beta.5](https://github.com/BixingWu/iOSRealRun/releases/tag/v0.2.0-beta.5)**
 
 | 平台 | 下载 | 启动方式 |
 | --- | --- | --- |
-| Windows x64 | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-Windows-x64.zip) | 完整解压，打开 `iOSRealRun/iOSRealRun.exe`。 |
-| macOS 15+ · Apple Silicon | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-macOS-arm64.zip) | 解压后打开 `iOSRealRun.app`。 |
-| Ubuntu 22.04 / 24.04 · x64 | [tar.gz](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/iOSRealRun-Linux-x64.tar.gz) | 解压后运行 `iOSRealRun/iOSRealRun`。 |
+| Windows x64 | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.5/iOSRealRun-Windows-x64.zip) | 完整解压，打开 `iOSRealRun/iOSRealRun.exe`。 |
+| macOS 15+ · Apple Silicon | [ZIP](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.5/iOSRealRun-macOS-arm64.zip) | 解压后打开 `iOSRealRun.app`。 |
+| Ubuntu 22.04 / 24.04 · x64 | [tar.gz](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.5/iOSRealRun-Linux-x64.tar.gz) | 解压后运行 `iOSRealRun/iOSRealRun`。 |
 
 压缩包自带运行环境和五条示例路线，无需安装 Python。请保留解压后的完整目录。
 
-本版修复旧版 iOS 被要求使用命令行的问题。iOS 14–16 需准备匹配的开发者镜像，发布包不内置 Apple 镜像；放置方法见 [旧版系统说明](docs/usage.md#ios-14-16-桌面连接)。下载后可按 [SHA-256 校验清单](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.4/SHA256SUMS.txt)核对文件。
+iOS 14–16 通过 USB 连接时，请准备匹配的 Apple 开发者镜像，放置方法见[旧版系统说明](docs/usage.md#ios-14-16-桌面连接)。下载后可按 [SHA-256 校验清单](https://github.com/BixingWu/iOSRealRun/releases/download/v0.2.0-beta.5/SHA256SUMS.txt)核对文件。
 
 macOS 和 Linux 为实验构建，尚未完成 USB 真机回放验证。macOS 应用未签名和公证；Linux 需要桌面环境及 `usbmuxd` 等系统依赖。见 [macOS 使用说明](docs/usage.md#macos)和 [Linux 安装命令](docs/usage.md#linux)。
 
@@ -30,7 +34,7 @@ macOS 和 Linux 为实验构建，尚未完成 USB 真机回放验证。macOS �
 4. **选择路线。** 使用预置路线，点击「绘制路线」在地图上选点，或通过「导入文件」「粘贴坐标」载入自己的路线。
 5. **开始模拟。** 设置速度和圈数，确认设备已识别后点击「开始模拟」。连接多台设备时，先在设备栏选择目标。
 
-速度单位为 **米/秒**，`4.4 m/s` 约为 `3:47 /km`。预置路线默认闭合；自己导入或绘制的路线默认从起点走到终点。开启「闭合路线」后可设置圈数，`0` 表示持续循环。
+默认速度为 **5 米/秒**，也可以直接输入配速 **3:20/km**。预置路线和闭合图形默认跑 **100 圈**，修改圈数时可在旁边看到总里程，填 `0` 表示持续循环。手绘、连笔字样和自己导入的路线默认从起点走到终点一次。点击「使用帮助」可查看当前版本和便携版的构建编号。
 
 暂停时保留当前模拟位置，停止时恢复定位。若中途断开设备，请重新连接并点击「恢复定位」，完成后再拔线。
 

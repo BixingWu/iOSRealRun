@@ -3,6 +3,10 @@ import yaml
 from iosrealrun import paths
 
 
+DEFAULT_SPEED = 5
+DEFAULT_LAPS = 100
+
+
 def read_settings(*, strict=False):
     config_dir = paths.config_directory()
     settings, warnings = {}, []

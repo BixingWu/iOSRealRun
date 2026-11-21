@@ -1,4 +1,5 @@
-v: 4.4
+v: 5
+laps: 100
 routeConfig: "routes/ZJGEast.txt"
 # 路线文件的原始坐标系：bd09（百度）、gcj02（高德/腾讯）或 wgs84（GPS）
 coordinateSystem: "bd09"

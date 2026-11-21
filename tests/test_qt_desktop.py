@@ -6,11 +6,12 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QPlainTextEdit, QPushButton
+from PySide6.QtCore import QPointF
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QLabel, QPlainTextEdit, QPushButton
 
 from iosrealrun.app_version import VERSION
 from iosrealrun.desktop_device import Device
@@ -51,6 +52,198 @@ class DesktopUITests(unittest.TestCase):
         self.assertFalse(window.device_box.isEnabled())
         self.assertTrue(window.map_button.isEnabled())
         self.assertTrue(window.import_button.isEnabled())
+
+    def test_editor_and_preview_share_style_without_changing_route(self):
+        window = self.make_window()
+        route = list(window.display_points)
+        style_box = window.map_style_box
+        style_box.setCurrentIndex(style_box.findData("dark"))
+        picker = window.pick_route()
+        self.application.processEvents()
+        editor_box = next(box for box in picker.findChildren(QComboBox) if box.findData("light") >= 0)
+        self.assertEqual(editor_box.currentData(), "dark")
+        editor_box.setCurrentIndex(editor_box.findData("street"))
+        picker.reject()
+        self.assertEqual(style_box.currentData(), "street")
+        self.assertEqual(window.display_points, route)
+
+    def test_local_preview_varies_on_screen_without_a_device(self):
+        window = self.make_window()
+        canvas = window.canvas
+        route = window.display_points.copy()
+        canvas._random.seed(27)
+        with patch.object(window, "submit", side_effect=AssertionError("unexpected device operation")):
+            window.preview_button.click()
+            self.assertTrue(canvas.previewing)
+            speeds, offsets = [], []
+            for _ in range(80):
+                canvas._last_tick -= .15
+                canvas._advance_preview()
+                speeds.append(canvas.preview_speed)
+                offsets.append(canvas._pixel_offset.toTuple())
+            self.assertLess(min(speeds), 5)
+            self.assertGreater(max(speeds), 5)
+            self.assertTrue(all(4.85 - 1e-9 <= speed <= 5.15 + 1e-9 for speed in speeds))
+            self.assertTrue(all(x*x + y*y <= 9.00001 for x, y in offsets))
+            self.assertGreater(len(set(offsets)), 1)
+            self.assertIsNone(canvas.marker)
+            self.assertEqual(window.display_points, route)
+            self.assertIn("本地预演", window.map_state.text())
+            self.assertFalse(canvas.grab().isNull())
+            window.speed.setText("4.9")
+            self.assertFalse(canvas.previewing)
+            self.assertEqual(window.map_state.text(), "路线预览")
+
+    def test_pace_inputs_sync_validate_and_show_total_distance(self):
+        window = self.make_window()
+        window.receive("scan", True, [Device("test", "iPhone", "15.6")])
+        self.assertEqual(window.pace.text(), "3:20")
+        for pace in ("3:20/km", "320", "3：20"):
+            window.pace.setText(pace)
+            self.assertEqual(float(window.speed.text()), 5)
+            self.assertTrue(window.start_button.isEnabled())
+        window.speed.setText("4")
+        self.assertEqual(window.pace.text(), "4:10")
+        window.pace.setText("4:00/km")
+        self.assertAlmostEqual(float(window.speed.text()), 1000 / 240, places=10)
+        window.format_pace()
+        self.assertEqual(window.pace.text(), "4:00")
+        for bad in ("", "3:", "3:75", "0:00", "0:30", "999:59", "3:20 xyz"):
+            window.pace.setText(bad)
+            self.assertEqual(window.speed.text(), "")
+            self.assertFalse(window.preview_button.isEnabled())
+            self.assertFalse(window.start_button.isEnabled())
+            self.assertIn("配速", window.parameter_hint.text())
+        window.speed.setText("5")
+        window.distance = 459
+        window.update_estimates()
+        self.assertEqual(window.total_distance_text.text(), "45.9 km")
+        window.laps.setText("0")
+        self.assertEqual(window.total_distance_text.text(), "持续循环")
+        window.laps.setText("bad")
+        self.assertEqual(window.total_distance_text.text(), "—")
+        window.closed.setChecked(False)
+        self.assertEqual(window.laps.text(), "1")
+        self.assertEqual(window.total_distance_text.text(), window.distance_text.text())
+
+    def test_preview_rate_and_seek_are_local_and_reset_on_stop(self):
+        window = self.make_window()
+        window.preview_button.click()
+        canvas = window.canvas
+        self.assertTrue(window.preview_controls.isVisible())
+        window.preview_rate_box.setCurrentIndex(window.preview_rate_box.findData(4))
+        window.preview_slider.setValue(400)
+        self.assertEqual(canvas.preview_fraction, .4)
+        self.assertEqual(window.preview_percent.text(), "40%")
+        canvas.set_seeking(True)
+        canvas._last_tick -= 12
+        canvas._advance_preview()
+        self.assertEqual(canvas.preview_fraction, .4)
+        canvas.set_seeking(False)
+        canvas._last_tick -= 1
+        canvas._advance_preview()
+        self.assertAlmostEqual(canvas.preview_fraction, .4 + 20 / window.distance, delta=.003)
+        self.assertTrue(4.85 <= canvas.preview_speed <= 5.15)
+        window.preview_button.click()
+        self.assertFalse(window.preview_controls.isVisible())
+        self.assertEqual(window.preview_slider.value(), 0)
+        window.preview_button.click()
+        self.assertEqual(canvas.preview_fraction, 0)
+        window.receive("scan", True, [Device("test", "iPhone", "15.6")])
+        with patch("iosrealrun.qt_desktop.replay_route", new_callable=Mock) as replay, patch.object(window, "submit"):
+            window.start_or_stop()
+        self.assertEqual(replay.call_args.kwargs["speed"], 5)
+        self.assertEqual(replay.call_args.kwargs["laps"], 100)
+
+    def test_help_shows_build_identifier_and_opens_the_manual_on_request(self):
+        window = self.make_window()
+        with patch("iosrealrun.qt_desktop.BUILD_ID", "20261120T033000Z-0123456789"), \
+                patch("iosrealrun.qt_desktop.QDesktopServices.openUrl") as open_url:
+            dialog = window.open_help()
+            text = " ".join(item.text() for item in dialog.findChildren(QLabel))
+            self.assertIn(VERSION, text)
+            self.assertIn("20261120T033000Z-0123456789", text)
+            open_url.assert_not_called()
+            next(b for b in dialog.findChildren(QPushButton) if b.text() == "打开使用手册").click()
+            self.assertEqual(open_url.call_args.args[0].toString(), "https://github.com/BixingWu/iOSRealRun#使用方法")
+            dialog.accept()
+
+    def test_local_preview_finishes_after_one_traversal(self):
+        window = self.make_window()
+        canvas = window.canvas
+        window.preview_button.click()
+        canvas._last_tick -= window.distance / 5 * 2
+        canvas._advance_preview()
+        self.assertFalse(canvas.previewing)
+        self.assertEqual(window.preview_button.text(), "本地预演")
+        self.assertIsNone(canvas.marker)
+
+    def test_drawing_templates_apply_to_the_desktop_with_their_closure(self):
+        window = self.make_window()
+        self.assertEqual(window.map_style_box.currentData(), "city")
+        for kind, title, closed in (("ikun", "连笔 IKUN", False), ("gem", "G.E.M.（解解）", False),
+                                    ("heart", "爱心", True)):
+            picker = window.pick_route()
+            self.application.processEvents()
+            picker.shape_box.setCurrentIndex(picker.shape_box.findData(kind))
+            self.assertEqual(picker.direction_box.isVisible(), not closed)
+            center = QPointF(picker.canvas.rect().center())
+            picker.canvas.add_point(center - QPointF(90, 42))
+            picker.canvas.add_point(center + QPointF(90, 42))
+            preview = picker.canvas.draft_route.copy()
+            picker.apply_button.click()
+            self.assertEqual(window.display_points, preview)
+            self.assertEqual(window.route_name, title)
+            self.assertEqual(window.closed.isChecked(), closed)
+            self.assertEqual(window.laps.text(), "100" if closed else "1")
+
+    def test_ikun_follows_the_selected_track_through_drawing_and_reopening(self):
+        window = self.make_window()
+        picker = window.pick_route()
+        canvas = picker.canvas
+        picker.shape_box.setCurrentIndex(picker.shape_box.findData("ikun"))
+        self.assertEqual(picker.direction_box.currentText(), "沿操场长边")
+        field_angle = canvas.field_angle
+        center = QPointF(canvas.rect().center())
+        canvas.add_point(center - QPointF(68, 90))
+        canvas.add_point(center + QPointF(68, 90))
+        expected = canvas.draft_route.copy()
+        guide = canvas.placement_outline.copy()
+        self.assertEqual(len(guide), 4)
+        self.assertNotAlmostEqual(guide[0]["lat"], guide[1]["lat"], places=6)
+        self.assertNotAlmostEqual(guide[0]["lng"], guide[1]["lng"], places=6)
+        picker.reference_box.click()
+        canvas.zoom(1)
+        self.assertEqual(canvas.draft_route, expected)
+        self.assertEqual(canvas.placement_outline, guide)
+        picker.direction_box.setCurrentIndex(picker.direction_box.findData("horizontal"))
+        self.assertNotEqual(canvas.placement_outline, guide)
+        picker.direction_box.setCurrentIndex(picker.direction_box.findData("auto"))
+        picker.apply_button.click()
+        self.assertEqual(window.display_points, expected)
+        again = window.pick_route()
+        self.assertEqual(again.canvas.field_angle, field_angle)
+        again.reject()
+        window.set_route([{"lat": 30, "lng": 120}, {"lat": 30.01, "lng": 120.02}], "步道",
+                         "wgs84", closed=False, remember=False)
+        other = window.pick_route()
+        self.assertIsNone(other.canvas.field_angle)
+        self.assertEqual(other.direction_box.currentText(), "沿选框长边")
+        other.reject()
+
+    def test_closed_laps_survive_switching_to_an_open_route(self):
+        window = self.make_window()
+        self.assertEqual(float(window.speed.text()), 5)
+        self.assertEqual(window.pace_text.text(), "3:20 /km")
+        self.assertEqual(window.laps.text(), "100")
+        window.set_route(window.points, "开放路线", closed=False, remember=False)
+        self.assertEqual(window.laps.text(), "1")
+        window.closed.setChecked(True)
+        self.assertEqual(window.laps.text(), "100")
+        window.laps.setText("7")
+        window.closed.setChecked(False)
+        window.set_route(window.points, "闭合路线", closed=True, remember=False)
+        self.assertEqual(window.laps.text(), "7")
 
     def test_bundled_route_stays_closed_when_its_file_resolves_to_resources(self):
         window = self.make_window()
@@ -214,8 +407,10 @@ class DesktopUITests(unittest.TestCase):
         with patch("iosrealrun.qt_desktop.replay_route", replay):
             window.start_or_stop()
             self.wait_for(lambda: started.is_set() and window.pause_button.isVisible())
+            self.assertEqual(window.map_state.text(), "实时位置")
             window.toggle_pause()
             self.assertTrue(window.paused.is_set())
+            self.assertEqual(window.map_state.text(), "模拟已暂停")
             window.close()
             self.assertTrue(window.isVisible())
             self.assertTrue(window.closing)

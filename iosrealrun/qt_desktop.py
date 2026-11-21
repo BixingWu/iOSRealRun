@@ -2,36 +2,38 @@
 
 import argparse
 import asyncio
-import math
+import re
 import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QEvent, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QEvent, QPointF, QRectF, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor, QDesktopServices, QFont, QIcon, QKeySequence, QLinearGradient,
     QPainter, QPainterPath, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
+    QApplication, QComboBox, QDialog, QFileDialog, QFrame,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
-from iosrealrun.app_version import VERSION
-from iosrealrun.config import read_settings
+from iosrealrun.app_version import BUILD_ID, VERSION
+from iosrealrun.config import DEFAULT_LAPS, DEFAULT_SPEED, read_settings
 from iosrealrun.desktop_device import connect_device, list_devices, replay_route, reset_location, reveal_developer_mode
 from iosrealrun.desktop_routes import (
     MAX_ROUTE_BYTES, last_route_path, load_route, parse_route_text, read_last_route, route_length, save_last_route,
 )
 from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, bundled_route, resolve_route
+from iosrealrun.qt_controls import CheckBox, ComboBox
+from iosrealrun.qt_map_picker import DEFAULT_STYLE, MAP_STYLES, MapPreview, open_map_picker
+from iosrealrun.route_drawing import SHAPES
+from iosrealrun.venue_overlay import VenueOverlay
 from iosrealrun.run import to_wgs84
 
 
 SYSTEMS = {"WGS 84 · GPS": "wgs84", "GCJ-02 · 高德 / 腾讯": "gcj02", "BD-09 · 百度": "bd09"}
 BLUE = "#0874e8"
-INK = "#181e2a"
-MUTED = "#53647a"
 FONT_FAMILIES = {
     "win32": ["Microsoft YaHei UI", "Microsoft YaHei", "SimSun", "Segoe UI"],
     "darwin": ["PingFang SC", "Hiragino Sans GB", "Helvetica Neue"],
@@ -40,11 +42,17 @@ FONT_FAMILIES = {
 
 STYLES = """
 QWidget { color: #181e2a; }
+QFrame#masthead { background: transparent; border: 0; }
+QLabel[role="mapState"] { color: #2663a7; font-size: 12px; font-weight: 600; }
+QFrame#metrics { background: #f3f7fd; border: 0; border-radius: 10px; }
+QPushButton[role="header"] { color: #2663a7; background: #eaf3ff; border-color: #d4e4f6; }
+QPushButton[role="header"]:hover { background: #dcecff; }
 QLabel[role="brand"] { font-size: 19px; font-weight: 600; }
 QLabel[role="section"] { color: #4a5b71; font-size: 13px; font-weight: 600; }
 QLabel[role="previewTitle"] { font-size: 24px; font-weight: 550; }
 QLabel[role="muted"] { color: #53647a; font-size: 12px; }
 QLabel[role="field"] { color: #354357; font-size: 12px; font-weight: 550; }
+QLabel[role="totalDistance"] { color: #264a72; font-size: 16px; font-weight: 600; }
 QLabel[role="value"] { color: #181e2a; font-size: 21px; font-weight: 600; }
 QLabel[error="true"] { color: #a22630; }
 QFrame[card="true"] { background: rgba(255, 255, 255, 238); border: 1px solid #e1e8f3; border-radius: 22px; }
@@ -87,9 +95,32 @@ QCheckBox::indicator:checked { background: #0874e8; border-color: #0874e8; }
 QCheckBox::indicator:disabled { background: #e1e8f3; border-color: #dae4f1; }
 QProgressBar { background: #eaf0f7; border: 0; border-radius: 2px; min-height: 4px; max-height: 4px; }
 QProgressBar::chunk { background: #0874e8; border-radius: 2px; }
+QSlider::groove:horizontal { height: 4px; border-radius: 2px; background: #e1eaf6; }
+QSlider::sub-page:horizontal { background: #0874e8; border-radius: 2px; }
+QSlider::handle:horizontal { background: white; border: 2px solid #0874e8; width: 12px;
+                             margin: -6px 0; border-radius: 8px; }
 QDialog { background: #f3f7fc; }
 QPlainTextEdit { padding: 10px; }
 """
+
+
+def pace_for_speed(value):
+    speed = float(value)
+    if not 0.1 <= speed <= 30:
+        raise ValueError
+    minutes, seconds = divmod(round(1000 / speed), 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+def speed_for_pace(value):
+    value = value.strip().lower().replace("：", ":")
+    match = re.fullmatch(r"(\d{1,3}):?([0-5]\d)(?:\s*/\s*km)?", value)
+    if not match:
+        raise ValueError
+    seconds = int(match[1]) * 60 + int(match[2])
+    if not seconds or not 0.1 <= 1000 / seconds <= 30:
+        raise ValueError
+    return 1000 / seconds
 
 
 def label(text, role=None, *, wrap=False):
@@ -120,8 +151,8 @@ def icon(kind, color=BLUE, size=20):
     painter.setPen(pen)
     if kind == "brand":
         gradient = QLinearGradient(0, 0, 24, 24)
-        gradient.setColorAt(0, QColor("#58a4ff"))
-        gradient.setColorAt(1, QColor("#0669e2"))
+        gradient.setColorAt(0, QColor("#5ca5ff"))
+        gradient.setColorAt(1, QColor("#0874e8"))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(gradient)
         painter.drawRoundedRect(QRectF(0, 0, 24, 24), 7, 7)
@@ -182,7 +213,7 @@ def button(text, callback, *, role=None, symbol=None):
     if role:
         widget.setProperty("role", role)
     if symbol:
-        widget.setIcon(icon(symbol, "#35618b"))
+        widget.setIcon(icon(symbol, "#2162a6" if role == "header" else "#356a9e"))
         widget.setIconSize(QSize(16, 16))
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
     widget.clicked.connect(callback)
@@ -199,154 +230,10 @@ class Surface(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         gradient = QLinearGradient(0, 0, self.width(), self.height())
-        gradient.setColorAt(0, QColor("#f7f9fd"))
-        gradient.setColorAt(0.56, QColor("#edf3fc"))
-        gradient.setColorAt(1, QColor("#f3f7fb"))
+        gradient.setColorAt(0, QColor("#f7faff"))
+        gradient.setColorAt(0.56, QColor("#edf3fb"))
+        gradient.setColorAt(1, QColor("#f2f6fb"))
         painter.fillRect(self.rect(), gradient)
-
-
-class ComboBox(QComboBox):
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#6a7e99"), 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        x, y = self.width() - 15, self.height() / 2
-        painter.drawLine(QPointF(x - 3.1, y - 1.5), QPointF(x, y + 1.8))
-        painter.drawLine(QPointF(x, y + 1.8), QPointF(x + 3.1, y - 1.5))
-
-    def wheelEvent(self, event):
-        if self.hasFocus() and self.view().isVisible():
-            super().wheelEvent(event)
-        else:
-            event.ignore()
-
-
-class CheckBox(QCheckBox):
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if not self.isChecked():
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = "#ffffff" if self.isEnabled() else "#778aa4"
-        painter.setPen(QPen(QColor(color), 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        y = self.height() / 2
-        painter.drawLine(QPointF(5, y), QPointF(8, y + 3))
-        painter.drawLine(QPointF(8, y + 3), QPointF(13, y - 3))
-
-
-class RouteCanvas(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setMinimumHeight(185)
-        self.points = []
-        self.marker = None
-        self.closed = False
-        self.projection = None
-        self.route_path = QPainterPath()
-        self.return_path = QPainterPath()
-        self.setAccessibleName("路线预览")
-
-    def set_route(self, points, closed):
-        self.points = points
-        self.closed = closed
-        self.marker = None
-        self.layout_route()
-        self.update()
-
-    def set_marker(self, point):
-        self.marker = point
-        self.update()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.layout_route()
-
-    def layout_route(self):
-        self.projection = None
-        self.route_path = QPainterPath()
-        self.return_path = QPainterPath()
-        if not self.points:
-            return
-        first = self.points[0]
-        longitude_scale = max(0.001, math.cos(math.radians(first["lat"])))
-        projected = []
-        previous = first["lng"]
-        longitude = 0.0
-        for point in self.points:
-            longitude += (point["lng"] - previous + 180) % 360 - 180
-            projected.append((longitude * longitude_scale, first["lat"] - point["lat"]))
-            previous = point["lng"]
-        xs, ys = zip(*projected)
-        xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
-        scale = min(max(1, self.width() - 110) / max(xmax - xmin, 1e-12),
-                    max(1, self.height() - 90) / max(ymax - ymin, 1e-12))
-        center_x, center_y = (xmin + xmax) / 2, (ymin + ymax) / 2
-
-        def pixel(x, y):
-            return QPointF(self.width() / 2 + (x - center_x) * scale,
-                           self.height() / 2 + (y - center_y) * scale)
-
-        def project(point):
-            offset = ((point["lng"] - first["lng"]) * longitude_scale - center_x)
-            longitude = (offset / longitude_scale + 180) % 360 - 180
-            return pixel(center_x + longitude * longitude_scale, first["lat"] - point["lat"])
-
-        self.projection = project
-        self.route_path.moveTo(pixel(*projected[0]))
-        for point in projected[1:]:
-            self.route_path.lineTo(pixel(*point))
-        if self.closed and self.points[-1] != first:
-            self.return_path.moveTo(pixel(*projected[-1]))
-            self.return_path.lineTo(pixel(*projected[0]))
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bounds = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        clip = QPainterPath()
-        clip.addRoundedRect(bounds, 17, 17)
-        painter.setClipPath(clip)
-
-        background = QLinearGradient(0, 0, self.width(), self.height())
-        background.setColorAt(0, QColor("#f8faff"))
-        background.setColorAt(1, QColor("#edf4fd"))
-        painter.fillRect(bounds, background)
-        painter.setPen(QPen(QColor("#e3ebf7"), 1))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(bounds, 17, 17)
-
-        if not self.projection:
-            painter.setPen(QColor(MUTED))
-            painter.drawText(bounds, Qt.AlignmentFlag.AlignCenter, "选择或导入路线")
-            return
-
-        painter.setPen(QPen(QColor("#dcecff"), 13, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPath(self.route_path)
-        painter.setPen(QPen(QColor("#538ee7"), 2.1, Qt.PenStyle.DashLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPath(self.return_path)
-        painter.setPen(QPen(QColor(BLUE), 3.4, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.drawPath(self.route_path)
-        start = self.projection(self.points[0])
-        end = self.projection(self.points[-1])
-        painter.setBrush(QColor("#fcfdff"))
-        if not self.closed:
-            painter.drawEllipse(end, 4.2, 4.2)
-        painter.setBrush(QColor(BLUE))
-        painter.setPen(QPen(QColor("#ffffff"), 2.4))
-        painter.drawEllipse(start, 6.4, 6.4)
-        if self.marker:
-            mark = self.projection(self.marker)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(8, 116, 232, 45))
-            painter.drawEllipse(mark, 13, 13)
-            painter.setBrush(QColor(BLUE))
-            painter.setPen(QPen(QColor("#ffffff"), 2.6))
-            painter.drawEllipse(mark, 7.5, 7.5)
 
 
 class BackgroundEvents(QObject):
@@ -355,15 +242,19 @@ class BackgroundEvents(QObject):
 
 
 class Desktop(QMainWindow):
-    def __init__(self, *, discover=True):
+    def __init__(self, *, discover=True, load_tiles=None, draft_dir=None):
         super().__init__()
         self.setWindowTitle("iOSRealRun")
         self.setWindowIcon(icon("brand", size=32))
         self.setStyleSheet(STYLES)
+        self.load_tiles = discover if load_tiles is None else load_tiles
         self.devices = []
         self.points = []
         self.display_points = []
         self.route_name = ""
+        self.drawing_field_angle = None
+        self.draft_dir = draft_dir
+        self._pace_edited = False
         self.distance = 0.0
         self.busy = None
         self.scanning = False
@@ -399,26 +290,28 @@ class Desktop(QMainWindow):
         surface = Surface()
         self.setCentralWidget(surface)
         page = QVBoxLayout(surface)
-        page.setContentsMargins(27, 19, 27, 20)
-        page.setSpacing(16)
+        page.setContentsMargins(16, 12, 16, 12)
+        page.setSpacing(10)
 
-        header = QHBoxLayout()
-        header.setSpacing(10)
+        masthead = QFrame(objectName="masthead")
+        header = QHBoxLayout(masthead)
+        header.setContentsMargins(14, 7, 12, 7)
+        header.setSpacing(9)
         brand = QLabel()
         brand.setPixmap(icon("brand", size=32).pixmap(QSize(32, 32)))
         header.addWidget(brand)
         header.addWidget(label("iOSRealRun", "brand"))
         header.addStretch()
-        help_button = button("使用帮助", self.open_help, role="ghost", symbol="help")
+        help_button = button("使用帮助", self.open_help, role="header", symbol="help")
         help_button.setToolTip(f"iOSRealRun {VERSION}")
         header.addWidget(help_button)
-        page.addLayout(header)
+        page.addWidget(masthead)
 
         content = QHBoxLayout()
-        content.setSpacing(16)
+        content.setSpacing(12)
         page.addLayout(content, 1)
         self.controls = QScrollArea()
-        self.controls.setFixedWidth(286)
+        self.controls.setFixedWidth(268)
         self.controls.setWidgetResizable(True)
         self.controls.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.controls.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -452,8 +345,10 @@ class Desktop(QMainWindow):
 
         self.import_shortcut = QShortcut(QKeySequence.StandardKey.Open, self)
         self.import_shortcut.activated.connect(self.browse_route)
-        for field in (self.speed, self.laps):
-            field.textChanged.connect(self.parameters_changed)
+        self.speed.textChanged.connect(self.speed_changed)
+        self.pace.textChanged.connect(self.pace_changed)
+        self.pace.editingFinished.connect(self.format_pace)
+        self.laps.textChanged.connect(self.parameters_changed)
 
     def eventFilter(self, widget, event):
         if event.type() == QEvent.Type.FocusIn:
@@ -469,7 +364,7 @@ class Desktop(QMainWindow):
         phone = QLabel()
         phone.setPixmap(icon("phone", size=17).pixmap(QSize(17, 17)))
         heading.addWidget(phone)
-        heading.addWidget(label("设备", "section"))
+        heading.addWidget(label("USB 设备", "section"))
         heading.addStretch()
         self.refresh_button = button("刷新", self.refresh_devices, role="ghost", symbol="refresh")
         heading.addWidget(self.refresh_button)
@@ -493,7 +388,7 @@ class Desktop(QMainWindow):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(15, 14, 15, 13)
         layout.setSpacing(8)
-        layout.addWidget(label("路线", "section"))
+        layout.addWidget(label("路线设置", "section"))
         self.route_box = ComboBox()
         self.route_box.setAccessibleName("路线")
         self.route_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -519,11 +414,19 @@ class Desktop(QMainWindow):
         parameters.setVerticalSpacing(5)
         self.speed = QLineEdit(objectName="number")
         self.speed.setAccessibleName("速度（米/秒）")
-        self.laps = QLineEdit("1", objectName="number")
+        self.pace = QLineEdit(objectName="number")
+        self.pace.setAccessibleName("配速（分/公里）")
+        self.pace.setPlaceholderText("3:20")
+        self.pace.setToolTip("可输入 3:20、320 或 3:20/km")
+        self.laps = QLineEdit(objectName="number")
         self.laps.setAccessibleName("圈数")
-        for column, (description, field) in enumerate((("速度 · 米/秒", self.speed), ("圈数", self.laps))):
-            parameters.addWidget(label(description, "field"), 0, column)
-            parameters.addWidget(field, 1, column)
+        self.total_distance_text = label("—", "totalDistance")
+        self.total_distance_text.setAccessibleName("总里程")
+        for index, (description, field) in enumerate((("速度 · 米/秒", self.speed), ("配速 · 分/公里", self.pace),
+                                                      ("圈数", self.laps), ("总里程", self.total_distance_text))):
+            row, column = divmod(index, 2)
+            parameters.addWidget(label(description, "field"), row * 2, column)
+            parameters.addWidget(field, row * 2 + 1, column)
             parameters.setColumnStretch(column, 1)
         layout.addLayout(parameters)
 
@@ -558,22 +461,78 @@ class Desktop(QMainWindow):
     def build_preview_card(self):
         frame = card()
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(18, 17, 18, 15)
-        layout.setSpacing(12)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+        context = QHBoxLayout()
+        self.map_state = label("路线预览", "mapState")
+        context.addWidget(self.map_state)
+        self.tile_state = label("", "muted")
+        self.tile_state.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.tile_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        context.addWidget(self.tile_state, 1)
+        layout.addLayout(context)
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(7)
         self.preview_name = label("路线预览", "previewTitle")
         self.preview_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        layout.addWidget(self.preview_name)
-        self.canvas = RouteCanvas()
+        toolbar.addWidget(self.preview_name, 1)
+        self.map_style_box = ComboBox()
+        self.map_style_box.setAccessibleName("底图样式")
+        self.map_style_box.setToolTip("切换底图样式")
+        for style_id, name in MAP_STYLES.items():
+            self.map_style_box.addItem(name, style_id)
+        self.map_style_box.setCurrentIndex(self.map_style_box.findData(DEFAULT_STYLE))
+        toolbar.addWidget(self.map_style_box)
+        self.canvas = MapPreview(load_tiles=self.load_tiles, style=self.map_style_box.currentData())
+        self.venues = VenueOverlay(self.canvas)
+        context.addWidget(self.venues)
+        self.canvas.changed.connect(self.update_map_status)
+        self.map_style_box.currentIndexChanged.connect(
+            lambda: self.canvas.set_map_style(self.map_style_box.currentData()))
+        self.preview_button = button("本地预演", self.toggle_local_preview)
+        self.preview_button.setToolTip("在电脑地图上预演一遍，查看速度和位置标记的轻微波动")
+        toolbar.addWidget(self.preview_button)
+        self.canvas.previewChanged.connect(self.update_local_preview)
+        fit_button = button("全览", self.canvas.fit_route)
+        fit_button.setToolTip("缩放至完整路线")
+        fit_button.setAccessibleName("显示完整路线")
+        toolbar.addWidget(fit_button)
+        layout.addLayout(toolbar)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         layout.addWidget(self.canvas, 1)
+        self.preview_controls = QWidget()
+        playback = QHBoxLayout(self.preview_controls)
+        playback.setContentsMargins(2, 0, 2, 0)
+        self.preview_slider = QSlider(Qt.Orientation.Horizontal)
+        self.preview_slider.setRange(0, 1000)
+        self.preview_slider.setPageStep(100)
+        self.preview_slider.setAccessibleName("本地预演进度")
+        self.preview_slider.sliderPressed.connect(lambda: self.canvas.set_seeking(True))
+        self.preview_slider.sliderReleased.connect(lambda: self.canvas.set_seeking(False))
+        self.preview_slider.valueChanged.connect(lambda value: self.canvas.seek_preview(value / 1000))
+        self.preview_percent = label("0%", "muted")
+        self.preview_percent.setMinimumWidth(self.preview_percent.fontMetrics().horizontalAdvance("100%") + 4)
+        self.preview_rate_box = ComboBox()
+        self.preview_rate_box.setAccessibleName("本地预演倍速")
+        self.preview_rate_box.setToolTip("本地预演播放速度")
+        for factor in (1, 2, 4):
+            self.preview_rate_box.addItem(f"{factor}×", factor)
+        self.preview_rate_box.currentIndexChanged.connect(
+            lambda: self.canvas.set_preview_rate(self.preview_rate_box.currentData()))
+        playback.addWidget(self.preview_slider, 1)
+        playback.addWidget(self.preview_percent)
+        playback.addWidget(self.preview_rate_box)
+        self.preview_controls.hide()
+        layout.addWidget(self.preview_controls)
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
 
-        metrics = QHBoxLayout()
-        metrics.setContentsMargins(3, 0, 3, 0)
+        metric_frame = QFrame(objectName="metrics")
+        metrics = QHBoxLayout(metric_frame)
+        metrics.setContentsMargins(13, 7, 13, 7)
         metrics.setSpacing(14)
         self.distance_text = label("—", "value")
         self.distance_caption = label("单圈距离", "muted")
@@ -591,13 +550,36 @@ class Desktop(QMainWindow):
             pair.addWidget(caption)
             pair.addWidget(item)
             metrics.addLayout(pair, 1)
-        layout.addLayout(metrics)
+        layout.addWidget(metric_frame)
         return frame
+
+    def update_map_status(self):
+        self.tile_state.setText(self.canvas.status())
+
+    def toggle_local_preview(self):
+        if self.canvas.previewing:
+            self.canvas.stop_preview()
+        elif not self.busy and not self.closing and not self.validate_parameters():
+            self.canvas.start_preview(float(self.speed.text()), self.distance)
+
+    def update_local_preview(self):
+        playing = self.canvas.previewing
+        self.preview_button.setText("结束预演" if playing else "本地预演")
+        self.preview_controls.setVisible(playing)
+        with QSignalBlocker(self.preview_slider):
+            self.preview_slider.setValue(round(self.canvas.preview_fraction * 1000))
+        self.preview_percent.setText(f"{self.canvas.preview_fraction:.0%}")
+        if playing:
+            self.map_state.setText(f"本地预演 · {self.canvas.preview_speed:.2f} 米/秒")
+        elif not self.busy:
+            self.map_state.setText("路线预览")
 
     def load_settings(self):
         settings, config_dir, warning = read_settings()
         self.interval = str(settings.get("updateInterval", 1.0))
-        self.speed.setText(str(settings.get("v", 4.4)))
+        self.speed.setText(str(settings.get("v", DEFAULT_SPEED)))
+        self.closed_laps = str(settings.get("laps", DEFAULT_LAPS))
+        self.laps.setText(self.closed_laps if self.closed.isChecked() else "1")
         system = str(settings.get("coordinateSystem", "bd09")).strip().lower().replace("-", "")
         if self.system_box.findData(system) < 0:
             warning = f"{warning} 不支持配置中的坐标系，已使用 BD-09。".strip()
@@ -620,7 +602,22 @@ class Desktop(QMainWindow):
         set_property(self.status_label, "error", error)
 
     def open_help(self):
-        QDesktopServices.openUrl(QUrl("https://github.com/BixingWu/iOSRealRun#使用方法"))
+        dialog = QDialog(self)
+        dialog.setWindowTitle("使用帮助")
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.addWidget(label(f"iOSRealRun {VERSION}", "previewTitle"))
+        build = label(f"构建编号  {BUILD_ID}" if BUILD_ID else "运行方式  源码运行", "muted")
+        build.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(build)
+        actions = QHBoxLayout()
+        actions.addWidget(button("打开使用手册", lambda: QDesktopServices.openUrl(
+            QUrl("https://github.com/BixingWu/iOSRealRun#使用方法")), role="map"))
+        actions.addWidget(button("关闭", dialog.accept))
+        layout.addLayout(actions)
+        dialog.open()
+        return dialog
 
     def open_driver_help(self):
         QDesktopServices.openUrl(QUrl("https://support.apple.com/118290"))
@@ -714,17 +711,35 @@ class Desktop(QMainWindow):
         self.remember_route()
 
     def change_closure(self, checked):
-        if not checked:
-            self.laps.setText("1")
+        self.update_lap_mode(checked)
         self.change_coordinate_system()
+
+    def update_lap_mode(self, closed):
+        if not closed:
+            self.closed_laps = self.laps.text()
+        self.laps.setText(self.closed_laps if closed else "1")
 
     def pick_route(self):
         if self.busy or self.closing:
             return
-        from iosrealrun.qt_map_picker import open_map_picker
+        reference = self.display_points
+        if self.closed.isChecked() and reference and reference[-1] != reference[0]:
+            reference = reference + reference[:1]
 
-        return open_map_picker(self, self.display_points,
-                               lambda points: self.set_route(points, "地图路线", "wgs84", False))
+        def apply(points):
+            name = dialog.draft_title or SHAPES.get(dialog.canvas.shape, "地图路线")
+            self.set_route(points, name, "wgs84", dialog.canvas.route_closed, field_angle=dialog.canvas.field_angle)
+            self.venues.copy_view(dialog.venues)
+
+        dialog = open_map_picker(self, reference, apply,
+                                 style=self.map_style_box.currentData(), load_tiles=self.load_tiles,
+                                 venues=self.venues.entries.values(), field_angle=self.drawing_field_angle,
+                                 draft_dir=self.draft_dir, venue_name=self.route_name, alignment_dir=self.venues.alignment_dir)
+        dialog.venues.copy_view(self.venues, focus_venue=True)
+        dialog.venues.alignmentChanged.connect(self.venues.reload_alignment)
+        dialog.mapStyleChanged.connect(
+            lambda style: self.map_style_box.setCurrentIndex(self.map_style_box.findData(style)))
+        return dialog
 
     def browse_route(self):
         if self.busy or self.closing:
@@ -810,19 +825,21 @@ class Desktop(QMainWindow):
             self.route_box.setCurrentIndex(self.route_box.findText(self.route_name))
         self.route_box.blockSignals(False)
 
-    def set_route(self, points, name, system=None, closed=True, *, remember=True):
+    def set_route(self, points, name, system=None, closed=True, *, remember=True, field_angle=None):
         if system:
             self.select_system(system)
-        self.closed.blockSignals(True)
-        self.closed.setChecked(closed)
-        self.closed.blockSignals(False)
-        if not closed:
-            self.laps.setText("1")
+        if self.closed.isChecked() != closed:
+            self.closed.blockSignals(True)
+            self.closed.setChecked(closed)
+            self.closed.blockSignals(False)
+            self.update_lap_mode(closed)
         self.points = points
         self.route_name = name
+        self.drawing_field_angle = field_angle
         self.update_route_choices()
         self.show_status("")
         self.update_route()
+        self.venues.select_route(name, self.display_points, fit=True)
         if remember:
             self.remember_route()
 
@@ -855,8 +872,37 @@ class Desktop(QMainWindow):
         self.canvas.set_route(self.display_points, self.closed.isChecked())
         self.parameters_changed()
 
+    def speed_changed(self, value):
+        self._pace_edited = False
+        try:
+            pace = pace_for_speed(value)
+        except (ValueError, OverflowError):
+            pace = ""
+        with QSignalBlocker(self.pace):
+            self.pace.setText(pace)
+        self.parameters_changed()
+
+    def pace_changed(self, value):
+        self._pace_edited = True
+        try:
+            speed = format(speed_for_pace(value), ".12g")
+        except (ValueError, OverflowError):
+            speed = ""
+        with QSignalBlocker(self.speed):
+            self.speed.setText(speed)
+        self.parameters_changed()
+
+    def format_pace(self):
+        if self._pace_edited and self.speed.text():
+            with QSignalBlocker(self.pace):
+                self.pace.setText(pace_for_speed(self.speed.text()))
+
     def validate_parameters(self):
         error = ""
+        invalid_pace = self._pace_edited and not self.speed.text()
+        set_property(self.pace, "error", invalid_pace)
+        if invalid_pace:
+            error = "请输入有效配速，如 3:20/km。速度范围为 0.1–30 米/秒。"
         for widget, value, convert, low, high, message in (
             (self.speed, self.speed.text(), float, 0.1, 30, "速度范围为 0.1–30 米/秒。"),
             (self.laps, self.laps.text() if self.closed.isChecked() else "1", int, 0, 999, "圈数需为 0–999 的整数。"),
@@ -865,7 +911,7 @@ class Desktop(QMainWindow):
                 valid = low <= convert(value) <= high
             except (ValueError, OverflowError):
                 valid = False
-            set_property(widget, "error", not valid)
+            set_property(widget, "error", not valid and not (widget is self.speed and invalid_pace))
             if not valid and not error:
                 error = message
         try:
@@ -875,6 +921,7 @@ class Desktop(QMainWindow):
         return error or ("" if interval_valid else "配置中的更新间隔需为 0.1–10 秒。")
 
     def parameters_changed(self):
+        self.canvas.stop_preview()
         self.update_estimates()
         self.update_controls()
 
@@ -883,8 +930,7 @@ class Desktop(QMainWindow):
             speed = float(self.speed.text())
             if not 0.1 <= speed <= 30:
                 raise ValueError
-            pace = round(1000 / speed)
-            self.pace_text.setText(f"{pace // 60}:{pace % 60:02d} /km")
+            self.pace_text.setText(f"{pace_for_speed(speed)} /km")
         except (ValueError, OverflowError):
             speed = None
             self.pace_text.setText("—")
@@ -900,6 +946,14 @@ class Desktop(QMainWindow):
         else:
             self.distance_text.setText("—")
         self.distance_caption.setText("单圈距离" if self.closed.isChecked() else "路线距离")
+        total = "—"
+        if self.distance > 0 and laps is not None:
+            if laps == 0:
+                total = "持续循环"
+            else:
+                metres = self.distance * laps
+                total = f"{metres:.0f} m" if metres < 1000 else f"{metres / 1000:.2f}".rstrip("0").rstrip(".") + " km"
+        self.total_distance_text.setText(total)
         if laps == 0 and speed and self.distance:
             duration = "持续"
         elif laps and speed and self.distance:
@@ -919,7 +973,7 @@ class Desktop(QMainWindow):
         self.refresh_button.setEnabled(idle and not self.scanning)
         self.device_action.setEnabled(idle and not self.scanning)
         self.device_box.setEnabled(idle and bool(self.devices))
-        for control in (self.route_box, self.system_box, self.speed, self.import_button,
+        for control in (self.route_box, self.system_box, self.speed, self.pace, self.import_button,
                         self.paste_button, self.map_button, self.closed, self.advanced_button):
             control.setEnabled(idle)
         self.laps.setEnabled(idle and self.closed.isChecked())
@@ -928,6 +982,19 @@ class Desktop(QMainWindow):
         self.parameter_hint.setText(error)
         self.parameter_hint.setVisible(bool(error))
         self.reset_button.setVisible(ready and idle)
+        state = "路线预览"
+        if running:
+            if self.stop.is_set():
+                state = "正在停止"
+            elif self.paused.is_set():
+                state = "模拟已暂停"
+            elif self.current_point is None:
+                state = "正在连接"
+            else:
+                state = "实时位置"
+        self.preview_button.setEnabled(idle and bool(self.display_points) and not error)
+        if not self.canvas.previewing:
+            self.map_state.setText(state)
         self.pause_button.setVisible(running and self.current_point is not None)
         self.pause_button.setEnabled(running and not self.stop.is_set())
         stopping = running and self.stop.is_set()
@@ -977,6 +1044,7 @@ class Desktop(QMainWindow):
             self.paused.set()
             self.pause_button.setText("继续")
             self.show_status("已暂停")
+        self.update_controls()
 
     def reset(self):
         device = self.selected_device()
@@ -986,6 +1054,7 @@ class Desktop(QMainWindow):
     def submit(self, action, operation, status=None):
         if action != "scan":
             self.busy = action
+            self.canvas.stop_preview()
         if status:
             self.show_status(status)
         self.update_controls()
@@ -1065,6 +1134,8 @@ class Desktop(QMainWindow):
     def closeEvent(self, event):
         if self.busy is None:
             self.scan_timer.stop()
+            self.canvas.stop_preview()
+            self.canvas.stop()
             event.accept()
             return
         self.closing = True
@@ -1076,12 +1147,16 @@ class Desktop(QMainWindow):
 
 
 def self_test(window):
+    from mapbox_vector_tile import decode
     from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
     from iosrealrun.desktop_device import Device
-    from iosrealrun.qt_map_picker import open_map_picker
 
     if UserspaceRsdTunnel is None:
         raise RuntimeError("Cannot import the device tunnel.")
+    if getattr(sys, "frozen", False) and not BUILD_ID:
+        raise RuntimeError("The portable build identifier is missing.")
+    if decode(b""):
+        raise RuntimeError("Expected an empty vector tile to have no map layers.")
     for path in ROUTES.values():
         if not window.open_route(bundled_route(path), default_system="bd09", remember=False) or not window.distance:
             raise RuntimeError(f"Cannot load bundled route {path}.")
@@ -1090,6 +1165,14 @@ def self_test(window):
     window.laps.setText("0")
     if window.duration_text.text() != "持续" or window.start_button.isEnabled():
         raise RuntimeError("No-device controls are not in their expected state.")
+    window.preview_button.click()
+    if not window.canvas.previewing or window.canvas.marker is not None:
+        raise RuntimeError("The local map preview did not start independently of the device.")
+    window.preview_rate_box.setCurrentIndex(window.preview_rate_box.findData(4))
+    window.preview_slider.setValue(500)
+    if window.canvas.preview_rate != 4 or window.canvas.preview_fraction != .5:
+        raise RuntimeError("The local preview playback controls did not take effect.")
+    window.preview_button.click()
     window.receive("scan", True, [Device("self-test", "iPhone", "15.6")])
     if not window.start_button.isEnabled() or not window.reset_button.isVisible() or window.device_action.isVisible():
         raise RuntimeError("iOS 15.6 controls unexpectedly require Developer Mode.")

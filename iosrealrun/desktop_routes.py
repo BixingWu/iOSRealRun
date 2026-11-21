@@ -12,7 +12,7 @@ MAX_ROUTE_BYTES = 2 * 1024 * 1024
 MAX_ROUTE_POINTS = 20_000
 
 
-def _normalize_points(points, *, preserve_endpoint=False) -> list[dict[str, float]]:
+def _normalize_points(points, *, preserve_endpoint=False, minimum=2) -> list[dict[str, float]]:
     if not isinstance(points, (list, tuple)):
         raise ValueError("请输入带有 lat 和 lng 的坐标列表。")
     if len(points) > MAX_ROUTE_POINTS:
@@ -42,7 +42,7 @@ def _normalize_points(points, *, preserve_endpoint=False) -> list[dict[str, floa
     # The run loop adds its own return leg, so a repeated starting point is redundant.
     if not preserve_endpoint and len(result) > 1 and result[0] == result[-1]:
         result.pop()
-    if len(result) < 2:
+    if len(result) < minimum:
         raise ValueError("路线至少需要两个不同的坐标点。")
     return result
 
@@ -151,9 +151,12 @@ def read_last_route(path: Path):
 
 
 def save_last_route(path: Path, points, name, system, closed):
-    data = json.dumps({"name": name, "points": points, "system": system, "closed": closed},
-                      ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    if len(data) > MAX_ROUTE_BYTES:
+    write_route_json(path, {"name": name, "points": points, "system": system, "closed": closed}, MAX_ROUTE_BYTES)
+
+
+def write_route_json(path, document, max_bytes):
+    data = json.dumps(document, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if len(data) > max_bytes:
         raise ValueError("路线太大，无法保存。")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
