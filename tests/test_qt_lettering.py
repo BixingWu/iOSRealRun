@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,7 +15,7 @@ from PySide6.QtWidgets import QApplication
 from iosrealrun.desktop_routes import read_last_route, save_last_route
 from iosrealrun.qt_desktop import Desktop
 from iosrealrun.qt_lettering import LetteringLap
-from iosrealrun.route_drawing import LETTERING_STROKES, SHAPES
+from iosrealrun.route_drawing import LETTERING_STROKES, SHAPES, shape_route
 
 
 class LetteringLapTests(unittest.TestCase):
@@ -57,6 +58,66 @@ class LetteringLapTests(unittest.TestCase):
             self.assertIsNone(read_last_route(file, include_lettering=True)[4])
             for invalid in (("gem", float("nan")), ("gem", True), ("unknown", 0), {}, []):
                 self.assertIsNone(LetteringLap.from_saved(invalid))
+
+    def test_lettering_preview_leaves_a_reprojectable_trail_at_the_displayed_speed(self):
+        window = Desktop(discover=False, load_tiles=False)
+        self.addCleanup(window.close)
+        canvas = window.canvas
+        box = [{"lat": 45, "lng": -70}, {"lat": 45.001, "lng": -69.998}]
+        with patch.object(window, "submit", side_effect=AssertionError("unexpected device operation")):
+            for kind in LETTERING_STROKES:
+                with self.subTest(kind=kind):
+                    points = shape_route(kind, box, lettering_direction="horizontal")
+                    window.set_route(points, SHAPES[kind], "wgs84", False, remember=False,
+                                     lettering=LetteringLap(kind, 0))
+                    window.preview_button.click()
+                    canvas._random.seed(27)
+                    canvas.seek_preview(.35)
+                    speeds = []
+                    for _ in range(80):
+                        previous_fraction, previous_speed = canvas.preview_fraction, canvas.preview_speed
+                        with patch("iosrealrun.qt_map_picker.time.monotonic", return_value=canvas._last_tick + .15):
+                            canvas._advance_preview()
+                        average_speed = (previous_speed + canvas.preview_speed) / 2
+                        expected = previous_fraction + .15 * average_speed / canvas.preview_length
+                        self.assertAlmostEqual(canvas.preview_fraction, expected)
+                        speeds.append(canvas.preview_speed)
+                    self.assertLess(min(speeds), 5)
+                    self.assertGreater(max(speeds), 5)
+                    self.assertTrue(all(4.85 - 1e-9 <= speed <= 5.15 + 1e-9 for speed in speeds))
+                    self.assertIn(f"{canvas.preview_speed:.2f} 米/秒", window.map_state.text())
+                    minutes, seconds = divmod(round(1000 / canvas.preview_speed), 60)
+                    self.assertEqual(window.pace_text.text(), f"{minutes}:{seconds:02d} /km")
+                    self.assertEqual(window.pace_caption.text(), "预演配速")
+                    history = list(canvas._preview_trail)
+                    self.assertEqual(len(history), canvas._preview_trail.maxlen)
+                    self.assertGreater(len({offset.toTuple() for _, offset in history}), 1)
+                    for zoom in (0, -1):
+                        if zoom:
+                            canvas.zoom(zoom)
+                        canvas._geometry = canvas._screen_geometry(canvas.points)
+                        line = canvas._preview_line(*canvas._geometry[:2])
+                        self.assertEqual(list(canvas._preview_trail), history)
+                        displacements = []
+                        for fraction, offset in history:
+                            centre = line.pointAtPercent(line.percentAtLength(line.length() * fraction))
+                            delta = canvas._preview_position(line, fraction, offset) - centre
+                            displacements.append(math.hypot(delta.x(), delta.y()))
+                        self.assertGreater(max(displacements), .2)
+                        self.assertLessEqual(max(displacements), 3.000001)
+                        fraction = 1 - 1e-7
+                        centre = line.pointAtPercent(line.percentAtLength(line.length() * fraction))
+                        near_seam = canvas._preview_position(line, fraction, QPointF(3, 0)) - centre
+                        self.assertLess(near_seam.manhattanLength(), .01)
+                    canvas.seek_preview(1)
+                    self.assertFalse(canvas._preview_trail)
+                    canvas._advance_preview()
+                    self.assertEqual(canvas.preview_lap, 2)
+                    window.preview_button.click()
+                    self.assertFalse(canvas._preview_trail)
+                    self.assertEqual(window.pace_text.text(), "3:20 /km")
+                    self.assertEqual(window.pace_caption.text(), "配速")
+                    self.assertEqual(window.display_points, points)
 
     def test_editor_and_desktop_loop_twice_with_original_route_intact(self):
         with tempfile.TemporaryDirectory() as directory:

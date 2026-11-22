@@ -734,6 +734,7 @@ class MapPreview(_MapCanvas):
         self._preview_timer.timeout.connect(self._advance_preview)
         self._preview_path = None
         self._preview_geometry = None
+        self._preview_trail = deque(maxlen=32)
         self._preview_fraction = 0.0
         self.preview_rate = 1
         self.preview_lap = 1
@@ -788,6 +789,7 @@ class MapPreview(_MapCanvas):
         self._preview_fraction = max(0.0, min(1.0, fraction))
         self._last_tick = time.monotonic()
         self._pixel_offset = QPointF()
+        self._preview_trail.clear()
         self.previewChanged.emit()
         self.update()
 
@@ -796,6 +798,7 @@ class MapPreview(_MapCanvas):
                 or not math.isfinite(length) or length <= 0):
             return
         self._target_speed = self.preview_speed = speed
+        self._preview_trail.clear()
         self.preview_lap = 1
         self._preview_length = length
         if self.lettering_preview:
@@ -824,6 +827,7 @@ class MapPreview(_MapCanvas):
             self._preview_fraction = 0.0
             self._seeking = False
             self._preview_path = self._preview_geometry = None
+            self._preview_trail.clear()
             self.previewChanged.emit()
             self.update()
 
@@ -831,22 +835,23 @@ class MapPreview(_MapCanvas):
         if not self.previewing or self._seeking:
             return
         now = time.monotonic()
-        elapsed = self.preview_rate * max(0.0, now - self._last_tick)
+        frame_time = max(0.0, now - self._last_tick)
         self._last_tick = now
-        if self.show_lettering_lap:
-            laps, self._preview_fraction = divmod(
-                self._preview_fraction + elapsed * self._target_speed / self._preview_length, 1.0)
-            self.preview_lap += int(laps)
-            self.previewChanged.emit()
-            self.update()
-            return
+        elapsed = self.preview_rate * frame_time
+        if frame_time > 1:
+            self._preview_trail.clear()
+        else:
+            self._preview_trail.append((self._preview_fraction, self._pixel_offset))
         retain = math.exp(-elapsed / 1.2)
         weight = math.sqrt(1 - retain * retain)
         previous_speed = self.preview_speed
         deviation = retain * (previous_speed / self._target_speed - 1) + weight * self._random.gauss(0, .014)
         self.preview_speed = self._target_speed * (1 + max(-.03, min(.03, deviation)))
         self._preview_fraction += elapsed * (previous_speed + self.preview_speed) / (2 * self._preview_length)
-        if self._preview_fraction >= 1:
+        if self.show_lettering_lap:
+            laps, self._preview_fraction = divmod(self._preview_fraction, 1.0)
+            self.preview_lap += int(laps)
+        elif self._preview_fraction >= 1:
             self.stop_preview()
             return
         shift = QPointF(self._random.gauss(0, 1.35), self._random.gauss(0, 1.35))
@@ -855,21 +860,46 @@ class MapPreview(_MapCanvas):
         self.previewChanged.emit()
         self.update()
 
+    def _preview_line(self, path, closing_point):
+        if self._preview_path is None or self._preview_geometry is not self._geometry:
+            line = self._painted_lap
+            if line is None:
+                line = QPainterPath()
+                line.addPolygon(path)
+                if closing_point is not None:
+                    line.lineTo(closing_point)
+            line.setCachingEnabled(True)
+            self._preview_path, self._preview_geometry = line, self._geometry
+        return self._preview_path
+
+    def _preview_position(self, line, fraction, offset):
+        if self._painted_lap is None:
+            return line.pointAtPercent(fraction) + offset
+        if fraction in (0.0, 1.0):
+            return line.pointAtPercent(0)
+        length = line.length()
+        centre = line.pointAtPercent(line.percentAtLength(length * fraction))
+        # Bring the display offset back to zero within one marker radius of the lap seam.
+        taper = min(1.0, length * min(fraction, 1 - fraction) / 7)
+        return centre + offset * taper
+
     def _marker_position(self, path, closing_point):
         if not self.previewing:
             return super()._marker_position(path, closing_point)
-        if self._painted_lap is not None:
-            if self._preview_fraction in (0.0, 1.0):
-                return self._painted_lap.pointAtPercent(0)
-            distance = self._painted_lap.length() * self._preview_fraction
-            return self._painted_lap.pointAtPercent(self._painted_lap.percentAtLength(distance))
-        if self._preview_geometry is not self._geometry:
-            line = QPainterPath()
-            line.addPolygon(path)
-            if closing_point is not None:
-                line.lineTo(closing_point)
-            self._preview_path, self._preview_geometry = line, self._geometry
-        return self._preview_path.pointAtPercent(self._preview_fraction) + self._pixel_offset
+        line = self._preview_line(path, closing_point)
+        return self._preview_position(line, self._preview_fraction, self._pixel_offset)
+
+    def _paint_route_copy(self, painter, path, closing_point, anchors):
+        super()._paint_route_copy(painter, path, closing_point, anchors)
+        if not self._preview_trail or not self.previewing:
+            return
+        line = self._preview_line(path, closing_point)
+        color = QColor("#dc811c")
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index, (fraction, offset) in enumerate(self._preview_trail, start=1):
+            color.setAlpha(45 + 150 * index // len(self._preview_trail))
+            painter.setBrush(color)
+            painter.drawEllipse(self._preview_position(line, fraction, offset), 2.2, 2.2)
 
 
 class MapPicker(QDialog):

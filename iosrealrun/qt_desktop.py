@@ -105,12 +105,16 @@ QPlainTextEdit { padding: 10px; }
 """
 
 
+def display_pace(speed):
+    minutes, seconds = divmod(round(1000 / speed), 60)
+    return f"{minutes}:{seconds:02d}"
+
+
 def pace_for_speed(value):
     speed = float(value)
     if not 0.1 <= speed <= 30:
         raise ValueError
-    minutes, seconds = divmod(round(1000 / speed), 60)
-    return f"{minutes}:{seconds:02d}"
+    return display_pace(speed)
 
 
 def speed_for_pace(value):
@@ -540,10 +544,11 @@ class Desktop(QMainWindow):
         metrics.setSpacing(14)
         self.distance_text = label("—", "value")
         self.distance_caption = label("单圈距离", "muted")
+        self.pace_caption = label("配速", "muted")
         self.pace_text = label("—", "value")
         self.duration_text = label("—", "value")
         for index, (caption, item) in enumerate(((self.distance_caption, self.distance_text),
-                                                 (label("配速", "muted"), self.pace_text),
+                                                 (self.pace_caption, self.pace_text),
                                                  (label("预计用时", "muted"), self.duration_text))):
             if index:
                 rule = QFrame()
@@ -577,14 +582,15 @@ class Desktop(QMainWindow):
         was_playing = not self.preview_controls.isHidden()
         self.preview_controls.setVisible(playing)
         if playing != was_playing:
+            self.pace_caption.setText("预演配速" if playing else "配速")
             self.update_estimates()
         with QSignalBlocker(self.preview_slider):
             self.preview_slider.setValue(round(self.canvas.preview_fraction * 1000))
         self.preview_percent.setText(f"{self.canvas.preview_fraction:.0%}")
-        if playing and self.canvas.show_lettering_lap:
-            self.map_state.setText(f"本地整圈预演 · 第 {self.canvas.preview_lap} 圈")
-        elif playing:
-            self.map_state.setText(f"本地预演 · {self.canvas.preview_speed:.2f} 米/秒")
+        if playing:
+            state = f"本地整圈预演 · 第 {self.canvas.preview_lap} 圈" if self.canvas.show_lettering_lap else "本地预演"
+            self.map_state.setText(f"{state} · {self.canvas.preview_speed:.2f} 米/秒")
+            self.pace_text.setText(f"{display_pace(self.canvas.preview_speed)} /km")
         elif not self.busy:
             self.map_state.setText("路线预览")
 
