@@ -24,7 +24,7 @@ from iosrealrun.desktop_device import connect_device, list_devices, replay_route
 from iosrealrun.desktop_routes import (
     MAX_ROUTE_BYTES, last_route_path, load_route, parse_route_text, read_last_route, route_length, save_last_route,
 )
-from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, bundled_route, resolve_route
+from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, RESOURCE_ROOT, bundled_route, resolve_route
 from iosrealrun.qt_controls import CheckBox, ComboBox
 from iosrealrun.qt_lettering import LetteringLap
 from iosrealrun.qt_map_picker import DEFAULT_STYLE, MAP_STYLES, MapPreview, open_map_picker
@@ -246,7 +246,10 @@ class Desktop(QMainWindow):
     def __init__(self, *, discover=True, load_tiles=None, draft_dir=None):
         super().__init__()
         self.setWindowTitle("iOSRealRun")
-        self.setWindowIcon(icon("brand", size=32))
+        if sys.platform == "win32":
+            QApplication.setWindowIcon(QIcon(str(RESOURCE_ROOT / "assets" / "app.ico")))
+        else:
+            self.setWindowIcon(icon("brand", size=32))
         self.setStyleSheet(STYLES)
         self.load_tiles = discover if load_tiles is None else load_tiles
         self.devices = []
@@ -1173,6 +1176,8 @@ def self_test(window):
         raise RuntimeError("Cannot import the device tunnel.")
     if getattr(sys, "frozen", False) and not BUILD_ID:
         raise RuntimeError("The portable build identifier is missing.")
+    if sys.platform == "win32" and not {16, 32, 48} <= {s.width() for s in QApplication.windowIcon().availableSizes()}:
+        raise RuntimeError("The Windows taskbar icon sizes are missing.")
     if decode(b""):
         raise RuntimeError("Expected an empty vector tile to have no map layers.")
     for path in ROUTES.values():
@@ -1206,6 +1211,11 @@ def main():
     parser.add_argument("--self-test", action="store_true", help="check Qt, bundled routes and the map picker")
     parser.add_argument("--screenshot", type=Path, help="save the desktop window as a PNG without probing hardware")
     args = parser.parse_args()
+    if sys.platform == "win32":
+        from ctypes import windll
+
+        # Give the packaged executable and the Python launcher the same taskbar identity.
+        windll.shell32.SetCurrentProcessExplicitAppUserModelID("BixingWu.iOSRealRun")
     app = QApplication(sys.argv[:1])
     app.setApplicationName("iOSRealRun")
     app.setApplicationVersion(VERSION)

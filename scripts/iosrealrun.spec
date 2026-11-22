@@ -47,6 +47,7 @@ if sys.platform == "win32":
         if not path.is_file():
             raise FileNotFoundError(f"Qt's Visual C++ runtime DLL was not found: {path}")
     icon = str(project / "assets" / "app.ico")
+    data.append((icon, "assets"))
 
 analysis = Analysis(
     [str(scripts / "desktop_entry.py")],

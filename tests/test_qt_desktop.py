@@ -1,5 +1,6 @@
 import io
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -11,6 +12,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QLabel, QPlainTextEdit, QPushButton
 
 from iosrealrun.app_version import VERSION
@@ -43,6 +45,25 @@ class DesktopUITests(unittest.TestCase):
                 return
             time.sleep(0.01)
         self.fail("The desktop did not finish the operation.")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows taskbar icons")
+    def test_windows_taskbar_icon_is_inherited_by_top_level_windows(self):
+        self.addCleanup(self.application.setWindowIcon, self.application.windowIcon())
+        self.application.setWindowIcon(QIcon())
+        window = self.make_window()
+        dialog = QDialog()
+        self.addCleanup(dialog.close)
+        icon = self.application.windowIcon()
+        self.assertEqual(window.windowIcon().cacheKey(), icon.cacheKey())
+        self.assertEqual(dialog.windowIcon().cacheKey(), icon.cacheKey())
+        sizes = {size.width() for size in icon.availableSizes()}
+        self.assertTrue({16, 20, 24, 32, 40, 48, 64, 256} <= sizes, sizes)
+        for size in (16, 32, 48):
+            image = icon.pixmap(size, size).toImage()
+            self.assertFalse(image.isNull())
+            pixel = image.pixelColor(image.width() // 4, image.height() // 4)
+            self.assertGreater(pixel.alpha(), 220)
+            self.assertGreater(pixel.blue() - pixel.red(), 100)
 
     def test_no_device_keeps_route_controls_available(self):
         window = self.make_window()
