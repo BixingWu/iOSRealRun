@@ -26,6 +26,7 @@ from iosrealrun.desktop_routes import (
 )
 from iosrealrun.paths import BUNDLED_ROUTES as ROUTES, bundled_route, resolve_route
 from iosrealrun.qt_controls import CheckBox, ComboBox
+from iosrealrun.qt_lettering import LetteringLap
 from iosrealrun.qt_map_picker import DEFAULT_STYLE, MAP_STYLES, MapPreview, open_map_picker
 from iosrealrun.route_drawing import SHAPES
 from iosrealrun.venue_overlay import VenueOverlay
@@ -252,6 +253,7 @@ class Desktop(QMainWindow):
         self.points = []
         self.display_points = []
         self.route_name = ""
+        self.route_lettering = None
         self.drawing_field_angle = None
         self.draft_dir = draft_dir
         self._pace_edited = False
@@ -490,7 +492,6 @@ class Desktop(QMainWindow):
         self.map_style_box.currentIndexChanged.connect(
             lambda: self.canvas.set_map_style(self.map_style_box.currentData()))
         self.preview_button = button("本地预演", self.toggle_local_preview)
-        self.preview_button.setToolTip("在电脑地图上预演一遍，查看速度和位置标记的轻微波动")
         toolbar.addWidget(self.preview_button)
         self.canvas.previewChanged.connect(self.update_local_preview)
         fit_button = button("全览", self.canvas.fit_route)
@@ -564,12 +565,22 @@ class Desktop(QMainWindow):
 
     def update_local_preview(self):
         playing = self.canvas.previewing
-        self.preview_button.setText("结束预演" if playing else "本地预演")
+        if playing:
+            self.preview_button.setText("结束预演")
+        else:
+            self.preview_button.setText("字样整圈预演" if self.route_lettering else "本地预演")
+            self.preview_button.setToolTip("在电脑地图上沿字样和收笔弧线循环播放" if self.route_lettering
+                                           else "在电脑地图上预演一遍路线")
+        was_playing = not self.preview_controls.isHidden()
         self.preview_controls.setVisible(playing)
+        if playing != was_playing:
+            self.update_estimates()
         with QSignalBlocker(self.preview_slider):
             self.preview_slider.setValue(round(self.canvas.preview_fraction * 1000))
         self.preview_percent.setText(f"{self.canvas.preview_fraction:.0%}")
-        if playing:
+        if playing and self.canvas.show_lettering_lap:
+            self.map_state.setText(f"本地整圈预演 · 第 {self.canvas.preview_lap} 圈")
+        elif playing:
             self.map_state.setText(f"本地预演 · {self.canvas.preview_speed:.2f} 米/秒")
         elif not self.busy:
             self.map_state.setText("路线预览")
@@ -585,9 +596,9 @@ class Desktop(QMainWindow):
             warning = f"{warning} 不支持配置中的坐标系，已使用 BD-09。".strip()
             system = "bd09"
         self.select_system(system)
-        saved = read_last_route(self.route_store) if self.route_store else None
+        saved = read_last_route(self.route_store, include_lettering=True) if self.route_store else None
         if saved:
-            self.set_route(*saved, remember=False)
+            self.set_route(*saved[:4], remember=False, lettering=LetteringLap.from_saved(saved[4]))
         else:
             path = resolve_route(str(settings.get("routeConfig", "routes/ZJGEast.txt")), config_dir)
             self.open_route(path, closed=True, remember=False)
@@ -728,7 +739,8 @@ class Desktop(QMainWindow):
 
         def apply(points):
             name = dialog.draft_title or SHAPES.get(dialog.canvas.shape, "地图路线")
-            self.set_route(points, name, "wgs84", dialog.canvas.route_closed, field_angle=dialog.canvas.field_angle)
+            self.set_route(points, name, "wgs84", dialog.canvas.route_closed, field_angle=dialog.canvas.field_angle,
+                           lettering=dialog.canvas.lettering_preview)
             self.venues.copy_view(dialog.venues)
 
         dialog = open_map_picker(self, reference, apply,
@@ -825,7 +837,7 @@ class Desktop(QMainWindow):
             self.route_box.setCurrentIndex(self.route_box.findText(self.route_name))
         self.route_box.blockSignals(False)
 
-    def set_route(self, points, name, system=None, closed=True, *, remember=True, field_angle=None):
+    def set_route(self, points, name, system=None, closed=True, *, remember=True, field_angle=None, lettering=None):
         if system:
             self.select_system(system)
         if self.closed.isChecked() != closed:
@@ -835,6 +847,7 @@ class Desktop(QMainWindow):
             self.update_lap_mode(closed)
         self.points = points
         self.route_name = name
+        self.route_lettering = lettering
         self.drawing_field_angle = field_angle
         self.update_route_choices()
         self.show_status("")
@@ -847,7 +860,8 @@ class Desktop(QMainWindow):
         if not self.route_store or not self.display_points:
             return
         try:
-            save_last_route(self.route_store, self.points, self.route_name, self.system_box.currentData(), self.closed.isChecked())
+            save_last_route(self.route_store, self.points, self.route_name, self.system_box.currentData(),
+                            self.closed.isChecked(), lettering=self.route_lettering)
         except (OSError, ValueError):
             self.show_status("路线可用，但未能保存到此电脑。", error=True)
 
@@ -869,7 +883,8 @@ class Desktop(QMainWindow):
             self.preview_name.setText("路线预览")
             self.preview_name.setToolTip("")
             self.show_status(str(error), error=True)
-        self.canvas.set_route(self.display_points, self.closed.isChecked())
+        self.canvas.set_route(self.display_points, self.closed.isChecked(), lettering=self.route_lettering)
+        self.update_local_preview()
         self.parameters_changed()
 
     def speed_changed(self, value):
@@ -940,12 +955,14 @@ class Desktop(QMainWindow):
                 raise ValueError
         except ValueError:
             laps = None
-        if self.distance > 0:
-            self.distance_text.setText(f"{self.distance:.0f} m" if self.distance < 1000 else
-                                       f"{self.distance / 1000:.2f} km")
+        local_lap = self.canvas.previewing and self.canvas.show_lettering_lap
+        distance = self.canvas.preview_length if local_lap else self.distance
+        if distance > 0:
+            self.distance_text.setText(f"{distance:.0f} m" if distance < 1000 else f"{distance / 1000:.2f} km")
         else:
             self.distance_text.setText("—")
-        self.distance_caption.setText("单圈距离" if self.closed.isChecked() else "路线距离")
+        caption = "单圈距离" if self.closed.isChecked() else "路线距离"
+        self.distance_caption.setText("预演单圈（估算）" if local_lap else caption)
         total = "—"
         if self.distance > 0 and laps is not None:
             if laps == 0:
@@ -954,10 +971,11 @@ class Desktop(QMainWindow):
                 metres = self.distance * laps
                 total = f"{metres:.0f} m" if metres < 1000 else f"{metres / 1000:.2f}".rstrip("0").rstrip(".") + " km"
         self.total_distance_text.setText(total)
-        if laps == 0 and speed and self.distance:
+        duration_laps = 1 if local_lap else laps
+        if duration_laps == 0 and speed and distance:
             duration = "持续"
-        elif laps and speed and self.distance:
-            seconds = max(1, round(self.distance * laps / speed))
+        elif duration_laps and speed and distance:
+            seconds = max(1, round(distance * duration_laps / speed))
             minutes, second = divmod(seconds, 60)
             hours, minute = divmod(minutes, 60)
             duration = f"{hours}:{minute:02d}:{second:02d}" if hours else f"{minute}:{second:02d}"

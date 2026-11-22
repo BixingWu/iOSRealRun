@@ -133,7 +133,7 @@ def last_route_path() -> Path:
     return folder / "last-route.json"
 
 
-def read_last_route(path: Path):
+def read_last_route(path: Path, *, include_lettering=False):
     try:
         with path.open("rb") as file:
             data = file.read(MAX_ROUTE_BYTES + 1)
@@ -145,13 +145,22 @@ def read_last_route(path: Path):
                 or system not in ("bd09", "gcj02", "wgs84")
                 or not isinstance(closed, bool) or not isinstance(points, list)):
             return None
-        return _normalize_points(points, preserve_endpoint=True), name, system, closed
+        result = _normalize_points(points, preserve_endpoint=True), name, system, closed
+        if not include_lettering:
+            return result
+        lettering = saved.get("lettering_preview")
+        if "lettering_preview" not in saved:
+            from iosrealrun.route_drawing import LETTERING_STROKES, SHAPES
+            kind = next((key for key in LETTERING_STROKES if SHAPES[key] == name), None)
+            lettering = (kind, None) if kind else None
+        return (*result, lettering)
     except (OSError, TypeError, KeyError, ValueError, RecursionError):
         return None
 
 
-def save_last_route(path: Path, points, name, system, closed):
-    write_route_json(path, {"name": name, "points": points, "system": system, "closed": closed}, MAX_ROUTE_BYTES)
+def save_last_route(path: Path, points, name, system, closed, *, lettering=None):
+    document = {"name": name, "points": points, "system": system, "closed": closed, "lettering_preview": lettering}
+    write_route_json(path, document, MAX_ROUTE_BYTES)
 
 
 def write_route_json(path, document, max_bytes):

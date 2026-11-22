@@ -190,6 +190,10 @@ def _template(kind):
     return vertices + vertices[:1]
 
 
+def vertical_lettering(direction, follows_track, width, height):
+    return height > width and not follows_track if direction == "auto" else direction == "vertical"
+
+
 def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None, rotation=0.0):
     """Return the fitted stroke and its four-corner map outline for drawing the guide."""
     if kind not in DRAFT_SHAPES or len(corners) != 2:
@@ -215,10 +219,8 @@ def shape_layout(kind, corners, *, lettering_direction="auto", field_angle=None,
     if min(width, height) * scale < 1:
         return [], outline
     vertices = _template(kind)
-    upright = height > width and not aligned
-    if lettering and lettering_direction != "auto":
-        upright = lettering_direction == "vertical"
-    if upright and (lettering or kind == "eight"):
+    if (lettering and vertical_lettering(lettering_direction, aligned, width, height)
+            or kind == "eight" and height > width):
         vertices = [(-y, x) for x, y in vertices]
     xs, ys = zip(*vertices)
     left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)

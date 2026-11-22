@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from iosrealrun.desktop_routes import MAX_ROUTE_POINTS, last_route_path
 from iosrealrun.drawing_drafts import DrawingDraft, draft_catalog, load_draft, save_draft
 from iosrealrun.qt_controls import CheckBox, ComboBox
+from iosrealrun.qt_lettering import LetteringLap
 from iosrealrun.route_drawing import LETTERING_STROKES, SHAPES, shape_layout, smooth_route, track_angle
 from iosrealrun.venue_overlay import VenueOverlay
 from iosrealrun.map_picker import (
@@ -120,6 +121,9 @@ class _MapCanvas(QWidget):
         self.points = []
         self.shape = None
         self.lettering_direction = "auto"
+        self.lettering_preview = None
+        self.show_lettering_lap = editable
+        self._painted_lap = None
         self.rotation = 0.0
         self._placement_drag = None
         self._placement_history = deque(maxlen=40)
@@ -271,7 +275,18 @@ class _MapCanvas(QWidget):
             self.draft_route = smooth_route(self.points, closed=self._closed_route)
         else:
             self.draft_route = self.points.copy()
+        self.lettering_preview = None
+        if self.shape in LETTERING_STROKES and self.draft_route:
+            self.lettering_preview = LetteringLap.from_frame(
+                self.shape, self._screen_path(self.placement_outline), self.lettering_direction,
+                self.field_angle is not None)
         self._geometry = None
+        self.update()
+        self.changed.emit()
+
+    def show_lettering_return(self, visible):
+        self.show_lettering_lap = visible
+        self._geometry = self._painted_lap = None
         self.update()
         self.changed.emit()
 
@@ -495,22 +510,32 @@ class _MapCanvas(QWidget):
             self.corners, self.rotation = result, rotation
             self._draft_changed()
 
+    def _screen_geometry(self, points):
+        self._painted_lap = None
+        if self.show_lettering_lap and self.lettering_preview:
+            ink = self.lettering_preview.screen_path(self._screen_path(points))
+            polygons = ink.toSubpathPolygons()
+            if polygons:
+                self._painted_lap = ink
+                bounds = ink.boundingRect()
+                return polygons[0], None, [polygons[0].first()], bounds.left(), bounds.right()
+        closing = self.route_closed and len(points) > 1 and points[0] != points[-1]
+        positions = self._screen_path(points + points[:1] if closing else points)
+        path = QPolygonF(positions)
+        if closing:
+            path.removeLast()
+        last = positions[-1] if closing else None
+        anchors = self._screen_path(self.points) if self._editable and not self.shape else None
+        bounds = positions.boundingRect()
+        return path, last, anchors, bounds.left(), bounds.right()
+
     def _paint_route(self, painter):
         points = self.draft_route if self._editable else self.points
         if not points:
             return
         size = TILE_SIZE * 2 ** self._zoom
         if self._geometry is None:
-            closing = self.route_closed and len(points) > 1 and points[0] != points[-1]
-            route = points + points[:1] if closing else points
-            positions = self._screen_path(route)
-            path = QPolygonF(positions)
-            if closing:
-                path.removeLast()
-            last = positions[-1] if closing else None
-            anchors = self._screen_path(self.points) if self._editable and not self.shape else None
-            bounds = positions.boundingRect()
-            self._geometry = (path, last, anchors, bounds.left(), bounds.right())
+            self._geometry = self._screen_geometry(points)
         path, closing_point, anchors, left, right = self._geometry
         copies = range(math.ceil((-right - 8) / size), math.floor((self.width() - left + 8) / size) + 1)
         for copy in copies:
@@ -711,13 +736,15 @@ class MapPreview(_MapCanvas):
         self._preview_geometry = None
         self._preview_fraction = 0.0
         self.preview_rate = 1
+        self.preview_lap = 1
         self._seeking = False
         self._pixel_offset = QPointF()
         self._random = random.Random()
         self.preview_speed = 0.0
 
-    def set_route(self, points, closed):
+    def set_route(self, points, closed, *, lettering=None):
         self.stop_preview()
+        self.lettering_preview = lettering
         self.points = list(points)
         self._closed_route = closed
         self.marker = None
@@ -736,6 +763,10 @@ class MapPreview(_MapCanvas):
     @property
     def previewing(self):
         return self._preview_timer.isActive()
+
+    @property
+    def preview_length(self):
+        return self._preview_length
 
     @property
     def preview_fraction(self):
@@ -765,7 +796,18 @@ class MapPreview(_MapCanvas):
                 or not math.isfinite(length) or length <= 0):
             return
         self._target_speed = self.preview_speed = speed
+        self.preview_lap = 1
         self._preview_length = length
+        if self.lettering_preview:
+            self.show_lettering_lap = True
+            self._geometry = self._screen_geometry(self.points)
+            if self._painted_lap is not None:
+                base = QPainterPath()
+                base.addPolygon(self._screen_path(self.points + self.points[:1] if self._closed_route else self.points))
+                if base.length() > 0:
+                    self._preview_length *= self._painted_lap.length() / base.length()
+            else:
+                self.show_lettering_lap = False
         self._preview_fraction = 0.0
         self._seeking = False
         self._pixel_offset = QPointF()
@@ -777,6 +819,8 @@ class MapPreview(_MapCanvas):
     def stop_preview(self):
         if self.previewing:
             self._preview_timer.stop()
+            self.show_lettering_lap = False
+            self._geometry = self._painted_lap = None
             self._preview_fraction = 0.0
             self._seeking = False
             self._preview_path = self._preview_geometry = None
@@ -789,6 +833,13 @@ class MapPreview(_MapCanvas):
         now = time.monotonic()
         elapsed = self.preview_rate * max(0.0, now - self._last_tick)
         self._last_tick = now
+        if self.show_lettering_lap:
+            laps, self._preview_fraction = divmod(
+                self._preview_fraction + elapsed * self._target_speed / self._preview_length, 1.0)
+            self.preview_lap += int(laps)
+            self.previewChanged.emit()
+            self.update()
+            return
         retain = math.exp(-elapsed / 1.2)
         weight = math.sqrt(1 - retain * retain)
         previous_speed = self.preview_speed
@@ -807,6 +858,11 @@ class MapPreview(_MapCanvas):
     def _marker_position(self, path, closing_point):
         if not self.previewing:
             return super()._marker_position(path, closing_point)
+        if self._painted_lap is not None:
+            if self._preview_fraction in (0.0, 1.0):
+                return self._painted_lap.pointAtPercent(0)
+            distance = self._painted_lap.length() * self._preview_fraction
+            return self._painted_lap.pointAtPercent(self._painted_lap.percentAtLength(distance))
         if self._preview_geometry is not self._geometry:
             line = QPainterPath()
             line.addPolygon(path)
@@ -895,6 +951,11 @@ class MapPicker(QDialog):
         self.direction_box.currentIndexChanged.connect(
             lambda: self.canvas.set_lettering_direction(self.direction_box.currentData()))
         tools.addWidget(self.direction_box)
+        self.lettering_lap_box = CheckBox("本地整圈示意", self)
+        self.lettering_lap_box.setChecked(True)
+        self.lettering_lap_box.setToolTip("显示本地预演的收笔弧线。取消勾选可查看原笔画。")
+        self.lettering_lap_box.toggled.connect(self.canvas.show_lettering_return)
+        tools.addWidget(self.lettering_lap_box)
         self.smooth_box = CheckBox("平滑补点", self)
         self.smooth_box.setToolTip("从第三个手绘点开始圆滑转弯，沿曲线约每 3 米补一个点")
         self.smooth_box.setChecked(True)
@@ -1110,6 +1171,7 @@ class MapPicker(QDialog):
         self.save_button.setEnabled(count > 0)
         shape = self.canvas.shape
         self.direction_box.setVisible(shape in LETTERING_STROKES)
+        self.lettering_lap_box.setVisible(shape in LETTERING_STROKES)
         self.smooth_box.setVisible(not shape)
         self.hand_closed_box.setVisible(not shape)
         if shape:
