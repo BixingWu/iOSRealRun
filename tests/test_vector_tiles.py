@@ -5,7 +5,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import mapbox_vector_tile
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 
 from iosrealrun.vector_tiles import PALETTES, TILEJSON, _VectorTileLoader, _prepare, _render
@@ -26,8 +26,8 @@ class VectorTileTests(unittest.TestCase):
         scene = _prepare(self.tile)
         for style, palette in PALETTES.items():
             with self.subTest(style=style):
-                southeast = QImage.fromData(_render(scene, style, (15, 1, 1), 14))
-                northwest = QImage.fromData(_render(scene, style, (15, 0, 0), 14))
+                southeast = _render(scene, style, (15, 1, 1), 14)
+                northwest = _render(scene, style, (15, 0, 0), 14)
                 self.assertEqual(southeast.pixelColor(128, 128), QColor(palette.water))
                 self.assertEqual(northwest.pixelColor(128, 128), QColor(palette.land))
 

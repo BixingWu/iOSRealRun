@@ -5,6 +5,7 @@ import asyncio
 import re
 import sys
 import threading
+from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QEvent, QPointF, QRectF, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from iosrealrun.app_version import BUILD_ID, VERSION
 from iosrealrun.config import DEFAULT_LAPS, DEFAULT_SPEED, read_settings
-from iosrealrun.desktop_device import connect_device, list_devices, replay_route, reset_location, reveal_developer_mode
+from iosrealrun.coordinates import to_wgs84
 from iosrealrun.desktop_routes import (
     MAX_ROUTE_BYTES, last_route_path, load_route, parse_route_text, read_last_route, route_length, save_last_route,
 )
@@ -30,7 +31,6 @@ from iosrealrun.qt_lettering import LetteringLap
 from iosrealrun.qt_map_picker import DEFAULT_STYLE, MAP_STYLES, MapPreview, open_map_picker
 from iosrealrun.route_drawing import SHAPES
 from iosrealrun.venue_overlay import VenueOverlay
-from iosrealrun.run import to_wgs84
 
 
 SYSTEMS = {"WGS 84 · GPS": "wgs84", "GCJ-02 · 高德 / 腾讯": "gcj02", "BD-09 · 百度": "bd09"}
@@ -103,6 +103,20 @@ QSlider::handle:horizontal { background: white; border: 2px solid #0874e8; width
 QDialog { background: #f3f7fc; }
 QPlainTextEdit { padding: 10px; }
 """
+
+
+async def _device_call(name, *args, **kwargs):
+    # The coroutine first runs inside Desktop.submit's worker thread.
+    from iosrealrun import desktop_device
+
+    return await getattr(desktop_device, name)(*args, **kwargs)
+
+
+connect_device = partial(_device_call, "connect_device")
+list_devices = partial(_device_call, "list_devices")
+replay_route = partial(_device_call, "replay_route")
+reset_location = partial(_device_call, "reset_location")
+reveal_developer_mode = partial(_device_call, "reveal_developer_mode")
 
 
 def display_pace(speed):

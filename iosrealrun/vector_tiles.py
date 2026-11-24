@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 import mapbox_vector_tile
 from google.protobuf.message import DecodeError
-from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen
 
 from iosrealrun.map_picker import CACHE_BYTES, TILE_SIZE, USER_AGENT, WEEK, _TileLoader
@@ -232,11 +232,7 @@ def _render(scene, style, key, source_zoom):
         _draw_labels(painter, labels, view, factor, palette, z)
     finally:
         painter.end()
-    buffer = QBuffer()
-    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-    if not image.save(buffer, "PNG"):
-        raise ValueError("Cannot encode rendered tile")
-    return bytes(buffer.data())
+    return image
 
 
 def _draw_labels(painter, labels, view, factor, palette, zoom):

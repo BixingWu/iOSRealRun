@@ -1,5 +1,6 @@
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -36,6 +37,48 @@ class DesktopUITests(unittest.TestCase):
         self.application.processEvents()
         self.addCleanup(window.close)
         return window
+
+    def test_device_backend_loads_on_first_scan_in_worker(self):
+        # Use a fresh interpreter since other desktop tests import Device directly.
+        script = """
+import sys
+import threading
+import time
+from unittest.mock import AsyncMock, patch
+
+from PySide6.QtWidgets import QApplication
+from iosrealrun import qt_desktop
+
+app = QApplication([])
+window = qt_desktop.Desktop(discover=False, load_tiles=False)
+window.show()
+app.processEvents()
+assert window.canvas.points
+assert "iosrealrun.desktop_device" not in sys.modules
+assert "pymobiledevice3" not in sys.modules
+assert "geopy" not in sys.modules
+
+scan = qt_desktop.list_devices
+async def scan_with_empty_usb_bus():
+    assert threading.current_thread() is not threading.main_thread()
+    from iosrealrun import desktop_device
+    with patch.object(desktop_device.usbmux, "list_devices", AsyncMock(return_value=[])) as usb:
+        result = await scan()
+        usb.assert_awaited_once()
+        return result
+
+with patch.object(qt_desktop, "list_devices", scan_with_empty_usb_bus):
+    window.refresh_devices()
+    deadline = time.monotonic() + 45
+    while window.scanning and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.01)
+assert not window.scanning and not window.scan_error, window.scan_error
+window.close()
+"""
+        with tempfile.TemporaryDirectory() as folder:
+            env = dict(os.environ, LOCALAPPDATA=folder, XDG_CONFIG_HOME=folder, QT_QPA_PLATFORM="offscreen")
+            subprocess.run([sys.executable, "-c", script], cwd=RESOURCE_ROOT, env=env, check=True, timeout=60)
 
     def wait_for(self, condition):
         deadline = time.monotonic() + 2

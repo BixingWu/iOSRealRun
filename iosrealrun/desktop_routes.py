@@ -4,8 +4,11 @@ import math
 import os
 import sys
 import tempfile
+from itertools import pairwise
 from pathlib import Path
 from xml.etree import ElementTree
+
+from geographiclib.geodesic import Geodesic
 
 
 MAX_ROUTE_BYTES = 2 * 1024 * 1024
@@ -115,12 +118,15 @@ def load_route(path: str | Path, *, preserve_endpoint=False) -> tuple[list[dict[
 
 
 def route_length(points: list[dict[str, float]], *, closed: bool = True) -> float:
-    from iosrealrun.run import geodistance
-
     if len(points) < 2:
         return 0
-    length = sum(geodistance(first, last) for first, last in zip(points, points[1:]))
-    return length + geodistance(points[-1], points[0]) if closed else length
+    coordinates = [(float(point["lat"]), float(point["lng"])) for point in points]
+    if any(not -90 <= lat <= 90 or not math.isfinite(lng) for lat, lng in coordinates):
+        raise ValueError("路线坐标必须是有效的经纬度。")
+    if closed:
+        coordinates.append(coordinates[0])
+    return sum(Geodesic.WGS84.Inverse(*start, *end, Geodesic.DISTANCE)["s12"]
+               for start, end in pairwise(coordinates))
 
 
 def last_route_path() -> Path:

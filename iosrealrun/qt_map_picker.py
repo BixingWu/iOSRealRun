@@ -9,6 +9,7 @@ from collections import OrderedDict, deque
 from PySide6.QtCore import QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
+    QImage,
     QKeySequence,
     QPainter,
     QPainterPath,
@@ -16,6 +17,7 @@ from PySide6.QtGui import (
     QPixmap,
     QPolygonF,
     QShortcut,
+    QTransform,
 )
 from PySide6.QtWidgets import (
     QDialog,
@@ -48,6 +50,7 @@ from iosrealrun.map_picker import (
     _route_pixels,
     _unproject,
     _visible_tiles,
+    _wrapped_delta,
 )
 
 
@@ -55,6 +58,8 @@ BLUE = "#0874e8"
 BORDER = "#dce5f2"
 MAP_BACKGROUND = "#f3f7fc"
 MAX_IMAGE_TILES = 72
+DENSE_ROUTE_POINTS = 512
+MAX_ROUTE_LAYER_PIXELS = 4 * 1024 * 1024
 DEFAULT_STYLE = "city"
 MAP_STYLES = {"city": "城市街图", "light": "清爽", "street": "街道", "dark": "夜色",
               "osm": "经典街图", "plain": "纯轨迹"}
@@ -102,6 +107,67 @@ QCheckBox::indicator:checked { background: #0874e8; border-color: #0874e8; }
 """
 
 
+def _stroke_vertices(points, tolerance):
+    """Simplify the display stroke in short blocks, bounding work on jagged routes."""
+    result = [points[0]]
+    limit = tolerance * tolerance
+    for first in range(0, len(points) - 1, 64):
+        pending = [(first, min(first + 64, len(points) - 1))]
+        while pending:
+            start, end = pending.pop()
+            x, y = points[start]
+            dx, dy = points[end][0] - x, points[end][1] - y
+            span = dx * dx + dy * dy
+            largest, split = limit, None
+            for i in range(start + 1, end):
+                px, py = points[i][0] - x, points[i][1] - y
+                along = px * dx + py * dy
+                if along <= 0:
+                    error = px * px + py * py
+                elif along >= span:
+                    error = (px - dx) ** 2 + (py - dy) ** 2
+                else:
+                    error = (px * dy - py * dx) ** 2 / span
+                if error > largest:
+                    largest, split = error, i
+            if split is None:
+                result.append(points[end])
+            else:
+                pending.extend(((split, end), (start, split)))
+    return result
+
+
+class _ProjectedRoute:
+    """Unwrapped Mercator vertices relative to the first point at zoom zero."""
+
+    def __init__(self, points):
+        self.points = points
+        self.origin = _project(points[0], 0)
+        self.vertices = _route_pixels(points, 0, *self.origin, 0, 0)
+        self.path = QPolygonF([QPointF(x, y) for x, y in self.vertices])
+        self.strokes = OrderedDict()
+
+    def screen_paths(self, zoom, center_x, center_y, width, height, ratio, closed):
+        scale = 2 ** zoom
+        size = TILE_SIZE * scale
+        left = width / 2 + _wrapped_delta(self.origin[0] * scale, center_x, size)
+        top = height / 2 + self.origin[1] * scale - center_y
+        transform = QTransform(scale, 0, 0, scale, left, top)
+        full_path = transform.map(self.path)
+        key = (zoom, ratio)
+        if key not in self.strokes:
+            vertices = _stroke_vertices(self.vertices, .25 / (scale * ratio))
+            self.strokes[key] = QPolygonF([QPointF(x, y) for x, y in vertices])
+            if len(self.strokes) > 2:
+                self.strokes.popitem(last=False)
+        self.strokes.move_to_end(key)
+        closing = None
+        if closed:
+            last_x = full_path.last().x()
+            closing = QPointF(last_x + _wrapped_delta(left, last_x, size), top)
+        return full_path, transform.map(self.strokes[key]), closing
+
+
 class _MapCanvas(QWidget):
     changed = Signal()
 
@@ -133,12 +199,17 @@ class _MapCanvas(QWidget):
         self.draft_route = []
         self.marker = None
         self._geometry = None
+        self._projected = None
+        self._stroke = None
+        self._geometry_ratio = None
         self._closed_route = closed
         self._seed = list(initial_points)
         self.reference = self._seed.copy() if editable else []
         self.venue_outline = []
         self.field_angle = field_angle if field_angle is not None else track_angle(self.reference)
         self.show_reference = bool(self.reference)
+        self._reference_projection = None
+        self._guide_ratio = None
         self._guide_geometry = None
         self._fit_pending = True
         self._zoom, self._x, self._y = _fit(self._seed, 860, 530)
@@ -266,6 +337,7 @@ class _MapCanvas(QWidget):
         self.update()
 
     def _draft_changed(self):
+        self._projected = None
         self.placement_outline = []
         if self.shape:
             self.draft_route, self.placement_outline = shape_layout(
@@ -350,8 +422,13 @@ class _MapCanvas(QWidget):
                 key, data = self._loader.results.get_nowait()
             except queue.Empty:
                 break
-            pixmap = QPixmap()
-            if data and pixmap.loadFromData(data, "PNG"):
+            if isinstance(data, QImage):
+                pixmap = QPixmap.fromImage(data)
+            else:
+                pixmap = QPixmap()
+                if data:
+                    pixmap.loadFromData(data, "PNG")
+            if not pixmap.isNull():
                 self._images[key] = pixmap
                 self._images.move_to_end(key)
                 self._unavailable.pop(key, None)
@@ -435,8 +512,17 @@ class _MapCanvas(QWidget):
     def _paint_guides(self, painter):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         if self.show_reference and self.reference:
-            if self._guide_geometry is None:
-                self._guide_geometry = self._screen_path(self.reference)
+            ratio = painter.device().devicePixelRatioF()
+            if self._guide_geometry is None or self._guide_ratio != ratio:
+                self._guide_ratio = ratio
+                if len(self.reference) >= DENSE_ROUTE_POINTS:
+                    if self._reference_projection is None or self._reference_projection.points is not self.reference:
+                        self._reference_projection = _ProjectedRoute(self.reference)
+                    _, self._guide_geometry, _ = self._reference_projection.screen_paths(
+                        self._zoom, self._x, self._y, self.width(), self.height(), ratio, False)
+                else:
+                    self._reference_projection = None
+                    self._guide_geometry = self._screen_path(self.reference)
             pen = QPen(QColor("#6681a0"), 2, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawPolyline(self._guide_geometry)
@@ -510,7 +596,9 @@ class _MapCanvas(QWidget):
             self.corners, self.rotation = result, rotation
             self._draft_changed()
 
-    def _screen_geometry(self, points):
+    def _screen_geometry(self, points, ratio=None):
+        self._geometry_ratio = self.devicePixelRatioF() if ratio is None else ratio
+        self._stroke = None
         self._painted_lap = None
         if self.show_lettering_lap and self.lettering_preview:
             ink = self.lettering_preview.screen_path(self._screen_path(points))
@@ -520,29 +608,32 @@ class _MapCanvas(QWidget):
                 bounds = ink.boundingRect()
                 return polygons[0], None, [polygons[0].first()], bounds.left(), bounds.right()
         closing = self.route_closed and len(points) > 1 and points[0] != points[-1]
-        positions = self._screen_path(points + points[:1] if closing else points)
-        path = QPolygonF(positions)
-        if closing:
-            path.removeLast()
-        last = positions[-1] if closing else None
+        if len(points) >= DENSE_ROUTE_POINTS:
+            if self._projected is None or self._projected.points is not points:
+                self._projected = _ProjectedRoute(points)
+            path, self._stroke, last = self._projected.screen_paths(
+                self._zoom, self._x, self._y, self.width(), self.height(), self._geometry_ratio, closing)
+        else:
+            path = self._screen_path(points + points[:1] if closing else points)
+            last = path.takeAt(len(path) - 1) if closing else None
         anchors = self._screen_path(self.points) if self._editable and not self.shape else None
-        bounds = positions.boundingRect()
-        return path, last, anchors, bounds.left(), bounds.right()
+        bounds = path.boundingRect()
+        left, right = bounds.left(), bounds.right()
+        if last is not None:
+            left, right = min(left, last.x()), max(right, last.x())
+        return path, last, anchors, left, right
 
     def _paint_route(self, painter):
         points = self.draft_route if self._editable else self.points
         if not points:
             return
         size = TILE_SIZE * 2 ** self._zoom
-        if self._geometry is None:
-            self._geometry = self._screen_geometry(points)
+        ratio = painter.device().devicePixelRatioF()
+        if self._geometry is None or self._geometry_ratio != ratio:
+            self._geometry = self._screen_geometry(points, ratio)
         path, closing_point, anchors, left, right = self._geometry
         copies = range(math.ceil((-right - 8) / size), math.floor((self.width() - left + 8) / size) + 1)
-        for copy in copies:
-            painter.save()
-            painter.translate(copy * size, 0)
-            self._paint_route_copy(painter, path, closing_point, anchors)
-            painter.restore()
+        self._paint_route_copies(painter, copies, size, path, closing_point, anchors)
         position = self._marker_position(path, closing_point)
         if position is not None:
             x, y = position.x(), position.y()
@@ -562,6 +653,13 @@ class _MapCanvas(QWidget):
             return self._screen_path([self.marker]).first()
         return None
 
+    def _paint_route_copies(self, painter, copies, size, path, closing_point, anchors):
+        for copy in copies:
+            painter.save()
+            painter.translate(copy * size, 0)
+            self._paint_route_copy(painter, path, closing_point, anchors)
+            painter.restore()
+
     def _paint_route_copy(self, painter, path, closing_point, anchors):
         if len(path) >= 2:
             for color, weight in (("#ffffff", 7), (BLUE, 3.5)):
@@ -569,7 +667,7 @@ class _MapCanvas(QWidget):
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
                 painter.setPen(pen)
-                painter.drawPolyline(path)
+                painter.drawPolyline(self._stroke if self._stroke is not None else path)
         if closing_point is not None:
             painter.setPen(QPen(QColor("#ffffff"), 6))
             painter.drawLine(path.last(), closing_point)
@@ -732,6 +830,7 @@ class MapPreview(_MapCanvas):
         super().__init__(parent, (), False, load_tiles, editable=False, style=style)
         self._preview_timer = QTimer(self, interval=150)
         self._preview_timer.timeout.connect(self._advance_preview)
+        self._route_layers = OrderedDict()
         self._preview_path = None
         self._preview_geometry = None
         self._preview_trail = deque(maxlen=32)
@@ -746,6 +845,8 @@ class MapPreview(_MapCanvas):
     def set_route(self, points, closed, *, lettering=None):
         self.stop_preview()
         self.lettering_preview = lettering
+        self._route_layers.clear()
+        self._projected = None
         self.points = list(points)
         self._closed_route = closed
         self.marker = None
@@ -889,8 +990,49 @@ class MapPreview(_MapCanvas):
         line = self._preview_line(path, closing_point)
         return self._preview_position(line, self._preview_fraction, self._pixel_offset)
 
-    def _paint_route_copy(self, painter, path, closing_point, anchors):
-        super()._paint_route_copy(painter, path, closing_point, anchors)
+    def _paint_route_ink(self, painter, copies, size, path, closing_point, anchors):
+        ratio = self._geometry_ratio
+        width, height = math.ceil(self.width() * ratio), math.ceil(self.height() * ratio)
+        if (self._stroke is None or len(self._stroke) < DENSE_ROUTE_POINTS
+                or not 0 < width * height <= MAX_ROUTE_LAYER_PIXELS):
+            super()._paint_route_copies(painter, copies, size, path, closing_point, anchors)
+            return
+
+        # Paint beyond the viewport so small whole-pixel pans can reuse the ink.
+        pad = math.ceil(64 * ratio)
+        if (width + 2 * pad) * (height + 2 * pad) > MAX_ROUTE_LAYER_PIXELS:
+            pad = 0
+        key = self._zoom, ratio, width, height
+        cached = self._route_layers.get(key)
+        if cached is not None:
+            x, y, image = cached
+            dx, dy = _wrapped_delta(x, self._x, size) * ratio, (y - self._y) * ratio
+            if (abs(dx) <= pad and abs(dy) <= pad
+                    and abs(dx - round(dx)) < 1e-6 and abs(dy - round(dy)) < 1e-6):
+                self._route_layers.move_to_end(key)
+                painter.drawPixmap(QPointF((round(dx) - pad) / ratio, (round(dy) - pad) / ratio), image)
+                return
+
+        margin = pad / ratio
+        left, right = self._geometry[-2:]
+        ink_copies = range(math.ceil((-right - margin - 8) / size),
+                           math.floor((self.width() + margin - left + 8) / size) + 1)
+        image = QPixmap(width + 2 * pad, height + 2 * pad)
+        image.setDevicePixelRatio(ratio)
+        image.fill(Qt.GlobalColor.transparent)
+        with QPainter(image) as layer:
+            layer.setRenderHint(QPainter.RenderHint.Antialiasing)
+            layer.translate(margin, margin)
+            super()._paint_route_copies(layer, ink_copies, size, path, closing_point, anchors)
+        self._route_layers[key] = self._x, self._y, image
+        self._route_layers.move_to_end(key)
+        while (len(self._route_layers) > 2 or
+               sum(tile.width() * tile.height() for _, _, tile in self._route_layers.values()) > MAX_ROUTE_LAYER_PIXELS):
+            self._route_layers.popitem(last=False)
+        painter.drawPixmap(QPointF(-margin, -margin), image)
+
+    def _paint_route_copies(self, painter, copies, size, path, closing_point, anchors):
+        self._paint_route_ink(painter, copies, size, path, closing_point, anchors)
         if not self._preview_trail or not self.previewing:
             return
         line = self._preview_line(path, closing_point)
@@ -899,7 +1041,9 @@ class MapPreview(_MapCanvas):
         for index, (fraction, offset) in enumerate(self._preview_trail, start=1):
             color.setAlpha(45 + 150 * index // len(self._preview_trail))
             painter.setBrush(color)
-            painter.drawEllipse(self._preview_position(line, fraction, offset), 2.2, 2.2)
+            point = self._preview_position(line, fraction, offset)
+            for copy in copies:
+                painter.drawEllipse(QPointF(point.x() + copy * size, point.y()), 2.2, 2.2)
 
 
 class MapPicker(QDialog):

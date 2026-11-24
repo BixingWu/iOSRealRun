@@ -10,7 +10,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QColor, QPixmap, QWheelEvent
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QPushButton, QWidget
 
@@ -51,6 +51,99 @@ class QtMapPickerTests(unittest.TestCase):
                                  style=style)
         self.app.processEvents()
         return dialog
+
+    def test_dense_route_keeps_full_geometry_across_zoom_world_seam_and_display_scale(self):
+        preview = MapPreview(load_tiles=False, style="plain")
+        self.addCleanup(preview.close)
+        preview.resize(800, 350)
+        points = [{"lat": 30 + .0003 * math.sin(i / 58),
+                   "lng": (179.999 + i * .000003 + 180) % 360 - 180} for i in range(1025)]
+        preview.set_route(points, True)
+        for zoom, ratio in ((18, 1.0), (19, 2.0), (0, 1.5), (18, 1.0)):
+            preview._zoom = zoom
+            preview.center_on(points[500])
+            path, closing, _, _, _ = preview._screen_geometry(preview.points, ratio)
+            reference = preview._screen_path(points + points[:1])
+            self.assertEqual(len(path), len(points))
+            self.assertLess(len(preview._stroke), len(path))
+            self.assertLessEqual(len(preview._projected.strokes), 2)
+            for actual, expected in zip(path, reference):
+                self.assertLess(math.dist(actual.toTuple(), expected.toTuple()), 1e-6)
+            self.assertLess(math.dist(closing.toTuple(), reference.last().toTuple()), 1e-6)
+            self.assertEqual(preview._stroke.first(), path.first())
+            self.assertEqual(preview._stroke.last(), path.last())
+        preview.set_route(points[::-1], False)
+        new_path, closing, *_ = preview._screen_geometry(preview.points)
+        self.assertIsNone(closing)
+        self.assertEqual(new_path.first(), preview._screen_path(preview.points).first())
+
+    def test_detailed_route_reuses_ink_while_the_marker_moves(self):
+        from iosrealrun.map_picker import _project, _unproject
+
+        preview = MapPreview(load_tiles=False, style="plain")
+        self.addCleanup(preview.close)
+        preview.resize(500, 240)
+        x, y = _project({"lat": 30, "lng": 0}, 18)
+        points = [_unproject(x - 200 + i / 3, y + (6 if i % 2 else -6), 18) for i in range(1200)]
+        preview.set_route(points, False)
+        preview._zoom = 18
+        preview._set_center(x, y)
+        preview.start_preview(5, 1000)
+
+        def frame(ratio):
+            image = QImage(round(preview.width() * ratio), round(preview.height() * ratio),
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.setDevicePixelRatio(ratio)
+            image.fill(Qt.GlobalColor.white)
+            with QPainter(image) as painter:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                preview._paint_route(painter)
+            return image
+
+        def latest_layer():
+            return next(reversed(preview._route_layers.values()))[2]
+
+        first = frame(1)
+        ink = latest_layer().cacheKey()
+        preview.seek_preview(.75)
+        self.assertNotEqual(first, frame(1))
+        self.assertEqual(ink, latest_layer().cacheKey())
+        preview._set_center(x + 17, y)
+        panned = frame(1)
+        self.assertEqual(ink, latest_layer().cacheKey())
+        preview._route_layers.clear()
+        self.assertEqual(panned, frame(1))
+        ink = latest_layer().cacheKey()
+        preview._set_center(x + 17.5, y)
+        frame(1)
+        self.assertNotEqual(ink, latest_layer().cacheKey())
+        frame(1.5)
+        self.assertEqual(latest_layer().devicePixelRatio(), 1.5)
+        frame(2)
+        self.assertLessEqual(len(preview._route_layers), 2)
+        preview.set_route(points[:2], False)
+        frame(1)
+        self.assertFalse(preview._route_layers)
+
+    def test_dense_stroke_keeps_sharp_turns_and_limits_pixel_error(self):
+        from iosrealrun.qt_map_picker import _stroke_vertices
+
+        points = [(float(i), 2 * math.sin(i / 10)) for i in range(200)]
+        points[73:76] = [(73, 2), (73, 20), (73, 2)]
+        tolerance = .25
+        stroke = _stroke_vertices(points, tolerance)
+        self.assertIn((73, 20), stroke)
+        self.assertLess(len(stroke), len(points))
+
+        def segment_distance(point, start, end):
+            x, y = point
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            span = dx * dx + dy * dy
+            fraction = max(0, min(1, ((x - start[0]) * dx + (y - start[1]) * dy) / span)) if span else 0
+            return math.hypot(x - start[0] - fraction * dx, y - start[1] - fraction * dy)
+
+        for point in points:
+            self.assertLessEqual(min(segment_distance(point, a, b) for a, b in zip(stroke, stroke[1:])), tolerance)
 
     def test_modal_draft_starts_empty_and_apply_emits_new_points(self):
         picker = self.make_picker(closed=True)
@@ -328,10 +421,10 @@ class QtMapPickerTests(unittest.TestCase):
         buffer = QBuffer(data)
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
         self.assertTrue(tile.save(buffer, "PNG"))
-        key = canvas._visible[0][0]
-        loader.results.put((key, bytes(data)))
-        canvas._poll()
-        self.assertEqual(canvas._images[key].toImage().pixelColor(0, 0), QColor("#b6d7b7"))
+        for (key, _, _), payload in zip(canvas._visible, (bytes(data), tile.toImage())):
+            loader.results.put((key, payload))
+            canvas._poll()
+            self.assertEqual(canvas._images[key].toImage().pixelColor(0, 0), QColor("#b6d7b7"))
         picker.reject()
         self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
