@@ -651,7 +651,7 @@ class _MapCanvas(QWidget):
 
     def _marker_position(self, path, closing_point):
         if self.marker is not None:
-            return self._screen_path([self.marker]).first()
+            return self._screen_path([self.marker])[0]
         return None
 
     def _paint_route_copies(self, painter, copies, size, path, closing_point, anchors):

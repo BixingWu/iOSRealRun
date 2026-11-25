@@ -76,7 +76,7 @@ class QtMapPickerTests(unittest.TestCase):
         preview.set_route(points[::-1], False)
         new_path, closing, *_ = preview._screen_geometry(preview.points)
         self.assertIsNone(closing)
-        self.assertEqual(new_path.first(), preview._screen_path(preview.points).first())
+        self.assertEqual(new_path[0], preview._screen_path(preview.points)[0])
 
     def test_detailed_route_reuses_ink_while_the_marker_moves(self):
         from iosrealrun.map_picker import _project, _unproject
@@ -496,6 +496,13 @@ class QtMapPickerTests(unittest.TestCase):
             snapshot = preview.grab()
             dpr = snapshot.devicePixelRatio()
             self.assertEqual(snapshot.toImage().pixelColor(round(x * dpr), round(y * dpr)), QColor("#ef9c28"))
+        projected = preview._screen_path([points[-1]])
+        expected = projected[0]
+        with patch.object(preview, "_screen_path", return_value=projected):
+            marker = preview._marker_position(None, None)
+        # first() borrows a Qt element. A marker must own its coordinates after the temporary polygon goes away.
+        projected.first().setX(expected.x() + 100)
+        self.assertEqual(marker, expected)
         self.assertEqual(initial_view, (preview._x, preview._y, preview._zoom))
         preview.set_marker(None)
         self.assertIsNone(preview.marker)

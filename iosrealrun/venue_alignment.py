@@ -35,7 +35,7 @@ class LandmarkMap(_MapCanvas):
         for index, point in enumerate(self.locations):
             if not point:
                 continue
-            pos = self._screen_path([point]).first()
+            pos = self._screen_path([point])[0]
             bubble = QRectF(pos.x()+3, pos.y()-22, 19, 19)
             color = QColor("#075bcc" if index == self.active else "#455d76")
             painter.setBrush(color)
