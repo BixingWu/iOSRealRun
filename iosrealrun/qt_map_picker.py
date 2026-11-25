@@ -59,6 +59,7 @@ BORDER = "#dce5f2"
 MAP_BACKGROUND = "#f3f7fc"
 MAX_IMAGE_TILES = 72
 DENSE_ROUTE_POINTS = 512
+STROKE_CHUNK_SEGMENTS = 128
 MAX_ROUTE_LAYER_PIXELS = 4 * 1024 * 1024
 DEFAULT_STYLE = "city"
 MAP_STYLES = {"city": "城市街图", "light": "清爽", "street": "街道", "dark": "夜色",
@@ -662,12 +663,21 @@ class _MapCanvas(QWidget):
 
     def _paint_route_copy(self, painter, path, closing_point, anchors):
         if len(path) >= 2:
+            stroke = self._stroke if self._stroke is not None else path
+            if self._stroke is not None and len(stroke) > DENSE_ROUTE_POINTS:
+                # Qt's wide-stroke rasterizer slows down on a single path with thousands of turns.
+                # Adjacent chunks share a vertex so both pen widths cover every segment.
+                parts = [QPolygonF(stroke.mid(start, STROKE_CHUNK_SEGMENTS + 1))
+                         for start in range(0, len(stroke) - 1, STROKE_CHUNK_SEGMENTS)]
+            else:
+                parts = (stroke,)
             for color, weight in (("#ffffff", 7), (BLUE, 3.5)):
                 pen = QPen(QColor(color), weight)
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
                 painter.setPen(pen)
-                painter.drawPolyline(self._stroke if self._stroke is not None else path)
+                for part in parts:
+                    painter.drawPolyline(part)
         if closing_point is not None:
             painter.setPen(QPen(QColor("#ffffff"), 6))
             painter.drawLine(path.last(), closing_point)

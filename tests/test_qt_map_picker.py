@@ -59,9 +59,10 @@ class QtMapPickerTests(unittest.TestCase):
         points = [{"lat": 30 + .0003 * math.sin(i / 58),
                    "lng": (179.999 + i * .000003 + 180) % 360 - 180} for i in range(1025)]
         preview.set_route(points, True)
+        preview.center_on(points[500])
         for zoom, ratio in ((18, 1.0), (19, 2.0), (0, 1.5), (18, 1.0)):
-            preview._zoom = zoom
-            preview.center_on(points[500])
+            preview.zoom(zoom - preview._zoom)
+            self.assertEqual(preview._zoom, zoom)
             path, closing, _, _, _ = preview._screen_geometry(preview.points, ratio)
             reference = preview._screen_path(points + points[:1])
             self.assertEqual(len(path), len(points))
@@ -124,6 +125,34 @@ class QtMapPickerTests(unittest.TestCase):
         preview.set_route(points[:2], False)
         frame(1)
         self.assertFalse(preview._route_layers)
+
+    def test_dense_stroke_draws_every_segment_across_chunk_boundaries(self):
+        from iosrealrun.map_picker import _project, _unproject
+        from iosrealrun.qt_map_picker import BLUE, STROKE_CHUNK_SEGMENTS
+
+        preview = MapPreview(load_tiles=False, style="plain")
+        self.addCleanup(preview.close)
+        preview.resize(820, 200)
+        center = {"lat": 30, "lng": 0}
+        x, y = _project(center, 18)
+        step = STROKE_CHUNK_SEGMENTS
+        # Long segments on both sides of the boundaries expose a missing join; also check the tail.
+        jumps = (step, step + 1, 2 * step, 2 * step + 1, 4 * step, 4 * step + 1, 599)
+        pixels = [QPointF(25 + i + 20 * sum(i >= end for end in jumps), 95 + (i % 2) * 10)
+                  for i in range(600)]
+        points = [_unproject(x + p.x() - 410, y + p.y() - 100, 18) for p in pixels]
+        preview.set_route(points, False)
+        preview.center_on(center)
+        preview.zoom(18 - preview._zoom)
+        image = QImage(preview.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.white)
+        with QPainter(image) as painter:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            preview._paint_route(painter)
+        self.assertEqual(len(preview._stroke), len(pixels))
+        for end in jumps:
+            midpoint = (pixels[end - 1] + pixels[end]) / 2
+            self.assertEqual(image.pixelColor(midpoint.toPoint()), QColor(BLUE), f"segment ending at {end}")
 
     def test_dense_stroke_keeps_sharp_turns_and_limits_pixel_error(self):
         from iosrealrun.qt_map_picker import _stroke_vertices
