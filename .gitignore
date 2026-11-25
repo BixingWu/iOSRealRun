@@ -9,6 +9,7 @@ __pycache__/
 /.venv-build/
 /dist/
 /DeveloperDiskImage/
+/场地参考/
 /config.yaml
 /config.local.yaml
 *.pyc

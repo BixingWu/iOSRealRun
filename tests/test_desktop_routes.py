@@ -10,6 +10,19 @@ from iosrealrun.paths import bundled_route
 
 
 class DesktopRouteTests(unittest.TestCase):
+    def test_route_length_matches_wgs84_across_poles_and_date_line(self):
+        from geopy.distance import geodesic
+
+        coordinates = [(89.9, 12), (35, 179.99999), (35, -179.99999), (-35, .00001)]
+        points = [{"lat": lat, "lng": lng} for lat, lng in coordinates]
+        for closed in (False, True):
+            segments = coordinates + [coordinates[0]] if closed else coordinates
+            expected = sum(geodesic(a, b).m for a, b in zip(segments, segments[1:]))
+            self.assertAlmostEqual(route_length(points, closed=closed), expected, places=6)
+        for bad in ({"lat": 91, "lng": 0}, {"lat": 0, "lng": float("nan")}):
+            with self.assertRaises(ValueError):
+                route_length([points[0], bad])
+
     def test_bundled_route_loads(self):
         points, coordinate_system = load_route(bundled_route('ZJGEast.txt'))
         self.assertGreater(len(points), 2)

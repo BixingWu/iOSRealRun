@@ -4,15 +4,18 @@ import math
 import os
 import sys
 import tempfile
+from itertools import pairwise
 from pathlib import Path
 from xml.etree import ElementTree
+
+from geographiclib.geodesic import Geodesic
 
 
 MAX_ROUTE_BYTES = 2 * 1024 * 1024
 MAX_ROUTE_POINTS = 20_000
 
 
-def _normalize_points(points, *, preserve_endpoint=False) -> list[dict[str, float]]:
+def _normalize_points(points, *, preserve_endpoint=False, minimum=2) -> list[dict[str, float]]:
     if not isinstance(points, (list, tuple)):
         raise ValueError("请输入带有 lat 和 lng 的坐标列表。")
     if len(points) > MAX_ROUTE_POINTS:
@@ -42,7 +45,7 @@ def _normalize_points(points, *, preserve_endpoint=False) -> list[dict[str, floa
     # The run loop adds its own return leg, so a repeated starting point is redundant.
     if not preserve_endpoint and len(result) > 1 and result[0] == result[-1]:
         result.pop()
-    if len(result) < 2:
+    if len(result) < minimum:
         raise ValueError("路线至少需要两个不同的坐标点。")
     return result
 
@@ -115,12 +118,15 @@ def load_route(path: str | Path, *, preserve_endpoint=False) -> tuple[list[dict[
 
 
 def route_length(points: list[dict[str, float]], *, closed: bool = True) -> float:
-    from iosrealrun.run import geodistance
-
     if len(points) < 2:
         return 0
-    length = sum(geodistance(first, last) for first, last in zip(points, points[1:]))
-    return length + geodistance(points[-1], points[0]) if closed else length
+    coordinates = [(float(point["lat"]), float(point["lng"])) for point in points]
+    if any(not -90 <= lat <= 90 or not math.isfinite(lng) for lat, lng in coordinates):
+        raise ValueError("路线坐标必须是有效的经纬度。")
+    if closed:
+        coordinates.append(coordinates[0])
+    return sum(Geodesic.WGS84.Inverse(*start, *end, Geodesic.DISTANCE)["s12"]
+               for start, end in pairwise(coordinates))
 
 
 def last_route_path() -> Path:
@@ -133,7 +139,7 @@ def last_route_path() -> Path:
     return folder / "last-route.json"
 
 
-def read_last_route(path: Path):
+def read_last_route(path: Path, *, include_lettering=False):
     try:
         with path.open("rb") as file:
             data = file.read(MAX_ROUTE_BYTES + 1)
@@ -145,15 +151,27 @@ def read_last_route(path: Path):
                 or system not in ("bd09", "gcj02", "wgs84")
                 or not isinstance(closed, bool) or not isinstance(points, list)):
             return None
-        return _normalize_points(points, preserve_endpoint=True), name, system, closed
+        result = _normalize_points(points, preserve_endpoint=True), name, system, closed
+        if not include_lettering:
+            return result
+        lettering = saved.get("lettering_preview")
+        if "lettering_preview" not in saved:
+            from iosrealrun.route_drawing import LETTERING_STROKES, SHAPES
+            kind = next((key for key in LETTERING_STROKES if SHAPES[key] == name), None)
+            lettering = (kind, None) if kind else None
+        return (*result, lettering)
     except (OSError, TypeError, KeyError, ValueError, RecursionError):
         return None
 
 
-def save_last_route(path: Path, points, name, system, closed):
-    data = json.dumps({"name": name, "points": points, "system": system, "closed": closed},
-                      ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    if len(data) > MAX_ROUTE_BYTES:
+def save_last_route(path: Path, points, name, system, closed, *, lettering=None):
+    document = {"name": name, "points": points, "system": system, "closed": closed, "lettering_preview": lettering}
+    write_route_json(path, document, MAX_ROUTE_BYTES)
+
+
+def write_route_json(path, document, max_bytes):
+    data = json.dumps(document, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if len(data) > max_bytes:
         raise ValueError("路线太大，无法保存。")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None

@@ -58,7 +58,10 @@ async def main(skip_mount=False):
     settings = config.Config()
     path = Path(settings.routeConfig)
     points, source_system = load_route(path)
-    speed = float(settings.v)
+    speed = float(getattr(settings, "v", config.DEFAULT_SPEED))
+    laps = getattr(settings, "laps", config.DEFAULT_LAPS)
+    if not isinstance(laps, int) or isinstance(laps, bool) or not 0 <= laps <= 999:
+        raise ValueError("圈数需为 0–999 的整数。")
     interval = float(getattr(settings, "updateInterval", 0.2))
     coordinate_system = source_system or getattr(settings, "coordinateSystem", "bd09")
     if not 0.1 <= speed <= 30 or not 0.1 <= interval <= 10:
@@ -82,8 +85,10 @@ async def main(skip_mount=False):
         await mount_legacy_image(serial)
 
     logger.info("路线 %s · 每圈 %.1f 米 · %s · 更新间隔 %.2f 秒", path.name, distance, coordinate_system, interval)
-    logger.info("将以约 %g m/s 循环回放路线。按 Ctrl+C 停止并尝试恢复定位。", speed)
-    options = {"update_interval": interval, "coordinate_system": coordinate_system, "clear_on_finish": True}
+    logger.info("将以约 %g m/s 回放%s。按 Ctrl+C 停止并尝试恢复定位。", speed,
+                f" {laps} 圈" if laps else "至手动停止")
+    options = {"update_interval": interval, "coordinate_system": coordinate_system,
+               "clear_on_finish": True, "loop_count": laps}
     if version_number >= (17, 4):
         async with tunnel.tunnel(serial) as (address, port):
             await run.run(address, port, points, speed, **options)

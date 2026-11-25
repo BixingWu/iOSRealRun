@@ -28,6 +28,12 @@ def run(command, *, timeout=None, env=None):
 
 def build_environment():
     env = os.environ.copy()
+    try:
+        revision = subprocess.run(["git", "-c", f"safe.directory={PROJECT.as_posix()}", "rev-parse", "HEAD"],
+                                  cwd=PROJECT, capture_output=True, text=True, timeout=5, check=True)
+        env["IOSREALRUN_BUILD_REVISION"] = revision.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
     if sys.platform == "win32":
         # Avoid collecting unrelated DLLs from tools on the user's PATH. In
         # particular, third-party ICU builds cannot replace Windows' ICU API.
